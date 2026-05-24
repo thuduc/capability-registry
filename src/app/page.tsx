@@ -77,6 +77,8 @@ export default function Home() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [authenticating, setAuthenticating] = useState<boolean>(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState<boolean>(false);
+  const [origin, setOrigin] = useState("http://localhost:3000");
   
   // Tag Management
   const [allTags, setAllTags] = useState<any[]>([]);
@@ -242,10 +244,12 @@ export default function Home() {
   useEffect(() => {
     if (selectedVersion) {
       const harnesses = selectedVersion.harnesses;
-      if (harnesses && harnesses.length > 0) {
-        setActiveInstallTab(harnesses[0]);
+      const supportedIds = ["claude", "opencode", "codex", "github-copilot", "ghcp"];
+      const filtered = harnesses.filter(h => supportedIds.includes(h));
+      if (filtered && filtered.length > 0) {
+        setActiveInstallTab(filtered[0]);
       } else {
-        setActiveInstallTab("cli");
+        setActiveInstallTab("");
       }
     }
   }, [selectedVersion]);
@@ -372,6 +376,34 @@ export default function Home() {
     const ver = selectedCapability.versions.find((v) => v.id === versionId);
     if (ver) {
       setSelectedVersion(ver);
+    }
+  };
+
+  const handleDownloadZip = async () => {
+    if (!selectedVersion || !selectedCapability) return;
+    try {
+      const res = await fetch(`/api/capabilities/versions/${selectedVersion.id}/download`, {
+        headers: {
+          "x-simulated-user": currentUser,
+          "x-simulated-roles": sessionRoles.join(","),
+        }
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Failed to download ZIP bundle.");
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${selectedCapability.name}-${selectedVersion.version}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Error downloading file");
     }
   };
 
@@ -612,6 +644,9 @@ export default function Home() {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      setOrigin(window.location.origin);
+    }
     fetchTags();
     // Fetch users on mount exactly once to populate the session dropdown
     const initUsers = async () => {
@@ -768,14 +803,7 @@ export default function Home() {
 
   // Generate dynamic installation commands based on tab selection
   const getInstallCommand = (capName: string, verStr: string, tab: string) => {
-    if (tab === "claude") {
-      return `agy install ${capName}@${verStr} --harness claude-code`;
-    } else if (tab === "github-copilot" || tab === "ghcp") {
-      return `copilot-agent --add-registry-plugin ${capName}:${verStr}`;
-    } else if (tab === "codex") {
-      return `codex-cli load ${capName} -v ${verStr}`;
-    }
-    return `curl -sS https://registry.corp.ema.ai/install/${capName}/${verStr} | bash`;
+    return `curl -fsSL ${origin}/api/install/${capName}/${verStr} | bash`;
   };
 
   if (!isAuthenticated) {
@@ -895,53 +923,6 @@ export default function Home() {
             <span>👥</span> {!isSidebarCollapsed && "Manage Users"}
           </div>
         </div>
-
-        {/* Footing Section: active session details and logout */}
-        <div className="sidebar-footer" style={{ padding: isSidebarCollapsed ? "15px 5px" : "15px 20px", borderTop: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "8px", alignItems: isSidebarCollapsed ? "center" : "stretch" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", justifyContent: isSidebarCollapsed ? "center" : "flex-start" }} title={`${currentUser} (${sessionRoles.includes("ADMIN") ? "Admin" : "User"})`}>
-            <div className="user-avatar" style={{ 
-              width: "32px", 
-              height: "32px", 
-              borderRadius: "50%", 
-              background: "var(--primary-light)", 
-              color: "var(--primary)", 
-              display: "flex", 
-              alignItems: "center", 
-              justifyContent: "center", 
-              fontWeight: "800", 
-              fontSize: "13px",
-              border: "1px solid var(--border-color)"
-            }}>
-              {currentUser ? currentUser.substring(0, 2).toUpperCase() : "U"}
-            </div>
-            {!isSidebarCollapsed && (
-              <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentUser}</span>
-                <span style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "capitalize" }}>
-                  {sessionRoles.includes("ADMIN") ? "Administrator" : "Standard User"}
-                </span>
-              </div>
-            )}
-          </div>
-          <a
-            href="#"
-            onClick={(e) => { e.preventDefault(); handleLogout(); }}
-            style={{ 
-              fontSize: "12px", 
-              color: "var(--danger)", 
-              display: "flex", 
-              alignItems: "center", 
-              justifyContent: isSidebarCollapsed ? "center" : "flex-start",
-              gap: "4px", 
-              textDecoration: "none", 
-              fontWeight: "600", 
-              marginTop: "4px" 
-            }}
-            title="Logout"
-          >
-            <span>🔒</span> {!isSidebarCollapsed && "Logout"}
-          </a>
-        </div>
       </aside>
 
       {/* --- Right Column: Main Workspace --- */}
@@ -973,6 +954,121 @@ export default function Home() {
                 {theme === "light" ? "🌙 Dark" : "☀️ Light"}
               </span>
             </button>
+
+            {/* Premium Profile Dropdown */}
+            <div style={{ display: "flex", alignItems: "center", borderLeft: "1px solid var(--border-color)", paddingLeft: "16px" }}>
+              <div style={{ position: "relative", display: "inline-block" }}>
+                <button
+                  type="button"
+                  onClick={() => setIsProfileDropdownOpen(!isProfileDropdownOpen)}
+                  style={{ 
+                    display: "flex", 
+                    alignItems: "center", 
+                    gap: "6px", 
+                    background: "none", 
+                    border: "none", 
+                    cursor: "pointer", 
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-md)",
+                    transition: "all 0.15s ease",
+                    outline: "none"
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.backgroundColor = "var(--primary-light)"; }}
+                  onMouseOut={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                  title="User Profile Options"
+                >
+                  <div className="user-avatar" style={{ 
+                    width: "28px", 
+                    height: "28px", 
+                    borderRadius: "50%", 
+                    background: "linear-gradient(135deg, var(--primary), var(--primary-hover))", 
+                    color: "#ffffff", 
+                    display: "flex", 
+                    alignItems: "center", 
+                    justifyContent: "center", 
+                    fontWeight: "800", 
+                    fontSize: "11px",
+                    boxShadow: "0 2px 4px rgba(0, 122, 135, 0.15)"
+                  }}>
+                    {currentUser ? currentUser.substring(0, 2).toUpperCase() : "U"}
+                  </div>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "2px" }}>▼</span>
+                </button>
+
+                {isProfileDropdownOpen && (
+                  <>
+                    {/* Backdrop overlay to close dropdown on outer clicks */}
+                    <div 
+                      onClick={() => setIsProfileDropdownOpen(false)}
+                      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 998 }}
+                    />
+                    {/* Dropdown panel */}
+                    <div style={{ 
+                      position: "absolute", 
+                      right: 0, 
+                      marginTop: "8px", 
+                      width: "180px", 
+                      backgroundColor: "var(--bg-secondary)", 
+                      border: "1px solid var(--border-color)", 
+                      borderRadius: "var(--radius-md)", 
+                      boxShadow: "var(--shadow-lg)", 
+                      zIndex: 999,
+                      padding: "12px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px",
+                      boxSizing: "border-box"
+                    }}>
+                      <div style={{ display: "flex", flexDirection: "column", lineHeight: "1.2" }}>
+                        <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-primary)" }}>{currentUser}</span>
+                        <span style={{ fontSize: "9px", color: "var(--text-muted)", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.03em", marginTop: "2px" }}>
+                          {sessionRoles.includes("ADMIN") ? "Administrator" : "Standard User"}
+                        </span>
+                      </div>
+                      
+                      <div style={{ height: "1px", backgroundColor: "var(--border-color)", margin: "4px 0" }} />
+                      
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsProfileDropdownOpen(false);
+                          handleLogout();
+                        }}
+                        style={{ 
+                          fontSize: "10px", 
+                          color: "var(--danger)", 
+                          backgroundColor: "rgba(239, 68, 68, 0.05)",
+                          border: "1px solid rgba(239, 68, 68, 0.12)",
+                          borderRadius: "var(--radius-sm)",
+                          padding: "6px 10px",
+                          display: "flex", 
+                          alignItems: "center", 
+                          justifyContent: "center",
+                          gap: "6px", 
+                          fontWeight: "700",
+                          cursor: "pointer",
+                          transition: "all 0.15s ease",
+                          width: "100%",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          boxSizing: "border-box"
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.12)";
+                          e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.05)";
+                          e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.12)";
+                        }}
+                      >
+                        <span>🔒</span> Logout
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </header>
 
@@ -1156,7 +1252,6 @@ export default function Home() {
                           <span className="badge badge-harness" style={{ opacity: 0.5 }}>Standard Manual</span>
                         )}
                       </div>
-                      <span className="card-owner">{cap.owner}</span>
                     </div>
                   </div>
                 );
@@ -1220,60 +1315,74 @@ export default function Home() {
               {selectedVersion.status === "ACTIVE" && (
                 <div>
                   <h4 style={{ fontSize: "12px", fontWeight: "700", textTransform: "uppercase", marginBottom: "8px", color: "var(--text-secondary)" }}>
-                    Direct Installation Guide
+                    Installation
                   </h4>
                   
-                  {/* Harness Selector Tabs */}
-                  <div className="details-tab-controller">
-                    {selectedVersion.harnesses.map((h, i) => (
-                      <div
-                        key={i}
-                        className={`details-env-tab ${activeInstallTab === h ? "active" : ""}`}
-                        onClick={() => setActiveInstallTab(h)}
-                      >
-                        {h.toUpperCase()}
-                      </div>
-                    ))}
-                    <div
-                      className={`details-env-tab ${activeInstallTab === "cli" ? "active" : ""}`}
-                      onClick={() => setActiveInstallTab("cli")}
-                    >
-                      General CLI
-                    </div>
-                  </div>
+                  {(() => {
+                    const supportedHarnessList = [
+                      { id: "claude", label: "Claude Code" },
+                      { id: "opencode", label: "OpenCode" },
+                      { id: "codex", label: "Codex/CLI" },
+                      { id: "github-copilot", label: "GHCP Agent" },
+                      { id: "ghcp", label: "GHCP Agent" }
+                    ];
+                    const declaredHarnesses = selectedVersion.harnesses || [];
+                    const visibleHarnessTabs = supportedHarnessList.filter(sh => declaredHarnesses.includes(sh.id));
+                    const uniqueVisibleHarnessTabs: typeof supportedHarnessList = [];
+                    visibleHarnessTabs.forEach(tab => {
+                      if (!uniqueVisibleHarnessTabs.some(u => u.label === tab.label)) {
+                        uniqueVisibleHarnessTabs.push(tab);
+                      }
+                    });
+                    
+                    return uniqueVisibleHarnessTabs.length > 0 ? (
+                      <>
+                        {/* Harness Selector Tabs */}
+                        <div className="details-tab-controller">
+                          {uniqueVisibleHarnessTabs.map((tab, i) => (
+                            <div
+                              key={i}
+                              className={`details-env-tab ${activeInstallTab === tab.id ? "active" : ""}`}
+                              onClick={() => setActiveInstallTab(tab.id)}
+                            >
+                              {tab.label}
+                            </div>
+                          ))}
+                        </div>
 
-                  {/* Terminal code snippet display */}
-                  <div className="install-command-box">
-                    <div className="install-code">
-                      {getInstallCommand(selectedCapability.name, selectedVersion.version, activeInstallTab)}
-                    </div>
-                    <button
-                      className="btn btn-secondary"
-                      style={{ padding: "4px 8px", fontSize: "11px", backgroundColor: "var(--bg-secondary)" }}
-                      onClick={() => {
-                        navigator.clipboard.writeText(
-                          getInstallCommand(selectedCapability.name, selectedVersion.version, activeInstallTab)
-                        );
-                        alert("Terminal command copied to clipboard!");
-                      }}
-                    >
-                      Copy
-                    </button>
-                  </div>
+                        {/* Terminal code snippet display */}
+                        <div className="install-command-box">
+                          <div className="install-code">
+                            {getInstallCommand(selectedCapability.name, selectedVersion.version, activeInstallTab)}
+                          </div>
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: "4px 8px", fontSize: "11px", backgroundColor: "var(--bg-secondary)" }}
+                            onClick={() => {
+                              navigator.clipboard.writeText(
+                                getInstallCommand(selectedCapability.name, selectedVersion.version, activeInstallTab)
+                              );
+                              alert("Terminal command copied to clipboard!");
+                            }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p style={{ fontSize: "12px", color: "var(--text-muted)", fontStyle: "italic", marginBottom: "12px" }}>
+                        This capability is registered as a Standard Manual. No automated installation harness configurations are required.
+                      </p>
+                    );
+                  })()}
 
-                  <a
-                    href={`/api/install/${selectedCapability.name}/${selectedVersion.version}?download=true`}
-                    download
+                  <button
+                    onClick={handleDownloadZip}
                     className="btn btn-secondary"
-                    style={{ width: "100%", textAlign: "center", display: "inline-flex" }}
-                    onClick={(e) => {
-                      // Prevent actual fetch, simulate local bundle zip retrieval
-                      e.preventDefault();
-                      alert(`Successfully downloaded original zip: ${selectedCapability.name}-${selectedVersion.version}.zip`);
-                    }}
+                    style={{ width: "100%", textAlign: "center", display: "inline-flex", justifyContent: "center", alignItems: "center", gap: "8px", cursor: "pointer" }}
                   >
                     📦 Download Universal Bundle (.zip)
-                  </a>
+                  </button>
 
                   {/* ROLLBACK Option for Admin on Active version */}
                   {viewMode === "admin" && selectedCapability.versions.length > 1 && (

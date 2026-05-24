@@ -991,6 +991,7 @@ a {
   flex-shrink: 0;
   padding: 20px 0;
   box-sizing: border-box;
+  transition: width 0.2s ease;
 }
 
 .app-main {
