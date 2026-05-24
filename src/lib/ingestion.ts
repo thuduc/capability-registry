@@ -95,7 +95,7 @@ export function processCapabilityZip(
   );
 
   const hasPluginFile = filePaths.some(
-    (p) => p.includes("dist/") || p.endsWith(".mcp.json")
+    (p) => p.includes("dist/") || p.endsWith(".mcp.json") || p.endsWith("plugin.json")
   );
 
   const hasSkillFile = filePaths.some(
@@ -103,10 +103,10 @@ export function processCapabilityZip(
   );
 
   let derivedType: "AGENT" | "PLUGIN" | "SKILL" = "SKILL";
-  if (hasAgentFile) {
-    derivedType = "AGENT";
-  } else if (hasPluginFile) {
+  if (hasPluginFile) {
     derivedType = "PLUGIN";
+  } else if (hasAgentFile) {
+    derivedType = "AGENT";
   } else if (hasSkillFile) {
     derivedType = "SKILL";
   } else {

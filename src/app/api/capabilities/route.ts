@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { processCapabilityZip, saveExtractedCapability } from "@/lib/ingestion";
+import AdmZip from "adm-zip";
 
 export async function GET(req: NextRequest) {
   try {
@@ -120,6 +121,14 @@ export async function POST(req: NextRequest) {
     const gitTag = formData.get("gitTag") as string;
     const comment = formData.get("comment") as string || "Initial upload.";
 
+    // Meta fields passed in step 2 (Verification/Ingestion wizard)
+    const name = formData.get("name") as string;
+    const description = formData.get("description") as string;
+    const version = formData.get("version") as string;
+    const owner = formData.get("owner") as string;
+    const harnessesStr = formData.get("harnesses") as string;
+    const type = formData.get("type") as string;
+
     let zipBuffer: Buffer;
 
     if (file) {
@@ -136,8 +145,70 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Either a ZIP file or Git Repository URL + Tag must be provided." }, { status: 400 });
     }
 
-    // 1. Process ZIP and extract details
-    const parsedData = processCapabilityZip(zipBuffer, Date.now().toString());
+    let parsedData: any;
+
+    if (name && version && owner) {
+      let harnesses: string[] = [];
+      try {
+        harnesses = JSON.parse(harnessesStr || "[]");
+      } catch (e) {
+        harnesses = [];
+      }
+
+      parsedData = {
+        name: name.trim(),
+        description: description || "",
+        version: version.trim(),
+        owner: owner.trim(),
+        harnesses,
+        type: (type || "SKILL").toUpperCase() as "AGENT" | "PLUGIN" | "SKILL"
+      };
+
+      const zip = new AdmZip(zipBuffer);
+      const zipEntries = zip.getEntries();
+      const filePaths = zipEntries.map((e) => e.entryName.replace(/\\/g, "/"));
+
+      // Schema Rigidity audits
+      for (const harness of harnesses) {
+        const normalizedHarness = harness.toLowerCase();
+        if (normalizedHarness === "claude" || normalizedHarness === "opencode" || normalizedHarness === "codex") {
+          const hasPluginJson = filePaths.some((p) => p.endsWith(".claude-plugin/plugin.json"));
+          if (!hasPluginJson) {
+            return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared, but missing '.claude-plugin/plugin.json' in bundle.` }, { status: 400 });
+          }
+        } else if (normalizedHarness === "github-copilot" || normalizedHarness === "github-copilot-agent" || normalizedHarness === "ghcp") {
+          const hasCopilotAgent = filePaths.some((p) => p.endsWith(".github/agents/profile.agent.md"));
+          if (!hasCopilotAgent) {
+            return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared, but missing '.github/agents/profile.agent.md' in bundle.` }, { status: 400 });
+          }
+        }
+      }
+
+      // Always write/overwrite the .capability.json in the zip so it matches the user's final edited metadata!
+      const manifestContent = {
+        name: parsedData.name,
+        description: parsedData.description,
+        version: parsedData.version,
+        owner: parsedData.owner,
+        harnesses: parsedData.harnesses
+      };
+
+      // Check if there is an existing .capability.json in the zip
+      const manifestEntry = zipEntries.find(
+        (e) => e.entryName === ".capability.json" || e.entryName.endsWith("/.capability.json")
+      );
+
+      if (manifestEntry) {
+        // Overwrite the existing file in the zip
+        zip.deleteFile(manifestEntry.entryName);
+      }
+      // Add the new manifest (always at the root '.capability.json')
+      zip.addFile(".capability.json", Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
+      zipBuffer = zip.toBuffer();
+    } else {
+      // Fallback: parse manifest directly from the ZIP
+      parsedData = processCapabilityZip(zipBuffer, Date.now().toString());
+    }
 
     // 2. Check if this version already exists
     const existingCapability = await prisma.capability.findUnique({

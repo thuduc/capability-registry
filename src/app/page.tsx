@@ -94,6 +94,18 @@ export default function Home() {
   const [newUsername, setNewUsername] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRoles, setNewUserRoles] = useState<string[]>(["USER"]);
+  const [isUpdatePasswordOpen, setIsUpdatePasswordOpen] = useState(false);
+  const [selectedUserForPasswordUpdate, setSelectedUserForPasswordUpdate] = useState<any | null>(null);
+  const [newUserPasswordUpdate, setNewUserPasswordUpdate] = useState("");
+  const [confirmUserPassword, setConfirmUserPassword] = useState("");
+  const [updatingPassword, setUpdatingPassword] = useState(false);
+
+  // Self User Password Update Management
+  const [isSelfPasswordOpen, setIsSelfPasswordOpen] = useState(false);
+  const [selfOldPassword, setSelfOldPassword] = useState("");
+  const [selfNewPassword, setSelfNewPassword] = useState("");
+  const [selfConfirmPassword, setSelfConfirmPassword] = useState("");
+  const [selfUpdating, setSelfUpdating] = useState(false);
 
   // Tag selection for administrative reviews
   const [selectedTagIdsForApproval, setSelectedTagIdsForApproval] = useState<string[]>([]);
@@ -124,6 +136,18 @@ export default function Home() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Ingestion / Import Step-by-Step Wizard States
+  const [importStep, setImportStep] = useState<"upload" | "confirm">("upload");
+  const [parsedMetadata, setParsedMetadata] = useState<any | null>(null);
+
+  // Ingestion Manual Forms
+  const [enteredName, setEnteredName] = useState("");
+  const [enteredVersion, setEnteredVersion] = useState("");
+  const [enteredOwner, setEnteredOwner] = useState("");
+  const [enteredDescription, setEnteredDescription] = useState("");
+  const [enteredHarnesses, setEnteredHarnesses] = useState<string[]>([]);
+  const [enteredType, setEnteredType] = useState("SKILL");
 
   // --- Comment Input State ---
   const [newCommentText, setNewCommentText] = useState("");
@@ -436,9 +460,9 @@ export default function Home() {
         formData.append("gitUrl", gitUrl);
         formData.append("gitTag", gitTag);
       }
-      formData.append("comment", importComment || "Initial upload.");
 
-      const res = await fetch("/api/capabilities", {
+      // Step 1: Submit to backend parse endpoint to verify .capability.json
+      const res = await fetch("/api/capabilities/parse", {
         method: "POST",
         headers: {
           "x-simulated-user": currentUser,
@@ -452,18 +476,99 @@ export default function Home() {
         throw new Error(data.error || "Failed to parse capability package.");
       }
 
-      // Success
+      // Transition to Step 2 (Confirm / Input screen)
+      setParsedMetadata(data);
+      setImportStep("confirm");
+
+      // Initialize entered fields using parsed metadata
+      if (data.metadata) {
+        setEnteredName(data.metadata.name || "");
+        setEnteredVersion(data.metadata.version || "");
+        setEnteredOwner(data.metadata.owner || "");
+        setEnteredDescription(data.metadata.description || "");
+        setEnteredHarnesses(data.metadata.harnesses || []);
+        setEnteredType(data.metadata.type || "SKILL");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setImportError(err.message || "An unexpected parsing error occurred.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleImportConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setImporting(true);
+    setImportError(null);
+
+    try {
+      // Input validation for capability metadata
+      if (!enteredName.trim() || !enteredVersion.trim() || !enteredOwner.trim() || !enteredDescription.trim()) {
+        throw new Error("All capability metadata fields are required.");
+      }
+      const semverRegex = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/;
+      if (!semverRegex.test(enteredVersion.trim())) {
+        throw new Error("Invalid version format. Must adhere to strict semver (e.g., '1.0.0').");
+      }
+      if (enteredHarnesses.length === 0) {
+        throw new Error("Please select at least one supported client harness.");
+      }
+
+      const formData = new FormData();
+      if (importType === "file") {
+        if (!selectedFile) throw new Error("File not found.");
+        formData.append("file", selectedFile);
+      } else {
+        if (!gitUrl || !gitTag) throw new Error("Git Repository URL and Tag are required.");
+        formData.append("gitUrl", gitUrl);
+        formData.append("gitTag", gitTag);
+      }
+
+      formData.append("comment", importComment || "Initial upload.");
+
+      // Always pass the confirmed/entered metadata fields to capabilities POST endpoint
+      formData.append("name", enteredName.trim());
+      formData.append("version", enteredVersion.trim());
+      formData.append("owner", enteredOwner.trim());
+      formData.append("description", enteredDescription.trim());
+      formData.append("harnesses", JSON.stringify(enteredHarnesses));
+      formData.append("type", enteredType);
+
+      const res = await fetch("/api/capabilities", {
+        method: "POST",
+        headers: {
+          "x-simulated-user": currentUser,
+          "x-simulated-roles": sessionRoles.join(","),
+        },
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to finalize capability import.");
+      }
+
+      // Success Reset
       setIsImportModalOpen(false);
+      setImportStep("upload");
+      setParsedMetadata(null);
       setSelectedFile(null);
       setGitUrl("");
       setGitTag("");
       setImportComment("");
-      
-      // Refresh registry
+      setEnteredName("");
+      setEnteredVersion("");
+      setEnteredOwner("");
+      setEnteredDescription("");
+      setEnteredHarnesses([]);
+      setEnteredType("SKILL");
+
+      alert(`Capability '${data.name}' imported successfully as Draft!`);
       fetchCapabilities();
     } catch (err: any) {
       console.error(err);
-      setImportError(err.message || "An unexpected ingestion error occurred.");
+      setImportError(err.message || "An unexpected import confirmation error occurred.");
     } finally {
       setImporting(false);
     }
@@ -483,7 +588,7 @@ export default function Home() {
           "x-simulated-roles": sessionRoles.join(","),
         },
         body: JSON.stringify({
-          author: currentUser,
+          author: viewMode === "admin" ? "Admin" : "Developer",
           text: newCommentText,
         }),
       });
@@ -801,6 +906,93 @@ export default function Home() {
     }
   };
 
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserForPasswordUpdate || !newUserPasswordUpdate.trim() || !confirmUserPassword.trim()) {
+      alert("Both password fields are required.");
+      return;
+    }
+
+    if (newUserPasswordUpdate !== confirmUserPassword) {
+      alert("New passwords do not match.");
+      return;
+    }
+
+    setUpdatingPassword(true);
+    try {
+      const res = await fetch("/api/users", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-simulated-user": currentUser,
+          "x-simulated-roles": sessionRoles.join(","),
+        },
+        body: JSON.stringify({
+          userId: selectedUserForPasswordUpdate.id,
+          password: newUserPasswordUpdate.trim(),
+          confirmPassword: confirmUserPassword.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update password.");
+
+      alert(`Password for user "${selectedUserForPasswordUpdate.username}" updated successfully!`);
+      setIsUpdatePasswordOpen(false);
+      setSelectedUserForPasswordUpdate(null);
+      setNewUserPasswordUpdate("");
+      setConfirmUserPassword("");
+      await fetchUsers();
+    } catch (err: any) {
+      alert(err.message || "Error updating password");
+    } finally {
+      setUpdatingPassword(false);
+    }
+  };
+
+  const handleSelfUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selfOldPassword.trim() || !selfNewPassword.trim() || !selfConfirmPassword.trim()) {
+      alert("All password fields are required.");
+      return;
+    }
+
+    if (selfNewPassword !== selfConfirmPassword) {
+      alert("New passwords do not match.");
+      return;
+    }
+
+    setSelfUpdating(true);
+    try {
+      const res = await fetch("/api/users", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-simulated-user": currentUser,
+          "x-simulated-roles": sessionRoles.join(","),
+        },
+        body: JSON.stringify({
+          oldPassword: selfOldPassword.trim(),
+          password: selfNewPassword.trim(),
+          confirmPassword: selfConfirmPassword.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update password.");
+
+      alert("Your password has been updated successfully!");
+      setIsSelfPasswordOpen(false);
+      setSelfOldPassword("");
+      setSelfNewPassword("");
+      setSelfConfirmPassword("");
+    } catch (err: any) {
+      alert(err.message || "Error updating password");
+    } finally {
+      setSelfUpdating(false);
+    }
+  };
+
   // Generate dynamic installation commands based on tab selection
   const getInstallCommand = (capName: string, verStr: string, tab: string) => {
     return `curl -fsSL ${origin}/api/install/${capName}/${verStr} | bash`;
@@ -1027,6 +1219,41 @@ export default function Home() {
                       </div>
                       
                       <div style={{ height: "1px", backgroundColor: "var(--border-color)", margin: "4px 0" }} />
+                      
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsProfileDropdownOpen(false);
+                          setIsSelfPasswordOpen(true);
+                        }}
+                        style={{ 
+                          fontSize: "10px", 
+                          color: "var(--text-primary)", 
+                          backgroundColor: "transparent",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-sm)",
+                          padding: "6px 10px",
+                          display: "flex", 
+                          alignItems: "center", 
+                          justifyContent: "center",
+                          gap: "6px", 
+                          fontWeight: "700",
+                          cursor: "pointer",
+                          transition: "all 0.15s ease",
+                          width: "100%",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          boxSizing: "border-box"
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = "var(--primary-light)";
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = "transparent";
+                        }}
+                      >
+                        🔑 Update Password
+                      </button>
                       
                       <button
                         type="button"
@@ -1792,6 +2019,7 @@ export default function Home() {
                       <th>Username</th>
                       <th>Assigned Permission Roles</th>
                       <th>Date Provisioned</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1811,6 +2039,18 @@ export default function Home() {
                         </td>
                         <td style={{ color: "var(--text-muted)" }}>
                           {new Date(user.createdAt).toLocaleDateString()}
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: "4px 8px", fontSize: "11px", backgroundColor: "var(--bg-secondary)" }}
+                            onClick={() => {
+                              setSelectedUserForPasswordUpdate(user);
+                              setIsUpdatePasswordOpen(true);
+                            }}
+                          >
+                            🔑 Change Password
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1977,13 +2217,156 @@ export default function Home() {
         </div>
       )}
 
+      {/* --- Update User Password Modal Overlay --- */}
+      {isUpdatePasswordOpen && selectedUserForPasswordUpdate && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: "16px", fontWeight: "700" }}>Update Password for {selectedUserForPasswordUpdate.username}</h3>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: "4px 8px" }}
+                onClick={() => {
+                  setIsUpdatePasswordOpen(false);
+                  setSelectedUserForPasswordUpdate(null);
+                  setNewUserPasswordUpdate("");
+                  setConfirmUserPassword("");
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleUpdatePassword}>
+              <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter new password..."
+                    className="form-input"
+                    value={newUserPasswordUpdate}
+                    onChange={(e) => setNewUserPasswordUpdate(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Confirm New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Confirm new password..."
+                    className="form-input"
+                    value={confirmUserPassword}
+                    onChange={(e) => setConfirmUserPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setIsUpdatePasswordOpen(false);
+                    setSelectedUserForPasswordUpdate(null);
+                    setNewUserPasswordUpdate("");
+                    setConfirmUserPassword("");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={updatingPassword}>
+                  {updatingPassword ? "Updating..." : "Save Password"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- Personal Self Password Update Modal Overlay --- */}
+      {isSelfPasswordOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: "16px", fontWeight: "700" }}>Update Your Password</h3>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: "4px 8px" }}
+                onClick={() => {
+                  setIsSelfPasswordOpen(false);
+                  setSelfOldPassword("");
+                  setSelfNewPassword("");
+                  setSelfConfirmPassword("");
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleSelfUpdatePassword}>
+              <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Current Old Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter current password..."
+                    className="form-input"
+                    value={selfOldPassword}
+                    onChange={(e) => setSelfOldPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter new password..."
+                    className="form-input"
+                    value={selfNewPassword}
+                    onChange={(e) => setSelfNewPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Confirm New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Confirm new password..."
+                    className="form-input"
+                    value={selfConfirmPassword}
+                    onChange={(e) => setSelfConfirmPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setIsSelfPasswordOpen(false);
+                    setSelfOldPassword("");
+                    setSelfNewPassword("");
+                    setSelfConfirmPassword("");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={selfUpdating}>
+                  {selfUpdating ? "Updating..." : "Save Password"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* --- Right-Column Wrapper closing tags --- */}
       </div>
 
       {/* 4. Import / Ingestion Modal Overlay */}
       {isImportModalOpen && (
         <div className="modal-overlay">
-          <div className="modal-content">
+          <div className="modal-content" style={{ maxWidth: "550px" }}>
             
             <div className="modal-header">
               <h3 style={{ fontSize: "16px", fontWeight: "700" }}>Import GenAI Capability Bundle</h3>
@@ -1992,6 +2375,12 @@ export default function Home() {
                 style={{ padding: "4px 8px" }}
                 onClick={() => {
                   setIsImportModalOpen(false);
+                  setImportStep("upload");
+                  setParsedMetadata(null);
+                  setSelectedFile(null);
+                  setGitUrl("");
+                  setGitTag("");
+                  setImportComment("");
                   setImportError(null);
                 }}
               >
@@ -1999,179 +2388,328 @@ export default function Home() {
               </button>
             </div>
 
-            <form onSubmit={handleImportSubmit}>
-              <div className="modal-body">
-                {importError && (
-                  <div className="panel" style={{ borderColor: "var(--danger)", padding: "10px 14px", marginBottom: "14px" }}>
-                    <p style={{ color: "var(--danger)", fontSize: "12px" }}>{importError}</p>
+            {importStep === "upload" ? (
+              <form onSubmit={handleImportSubmit}>
+                <div className="modal-body">
+                  <div style={{ fontSize: "11px", fontWeight: "700", textTransform: "uppercase", color: "var(--primary)", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>Step 1 of 2:</span>
+                    <span style={{ color: "var(--text-muted)" }}>Upload ZIP or Git Repository</span>
                   </div>
-                )}
 
-                {/* Import Type Toggle */}
-                <div className="form-group">
-                  <label className="form-label">Ingestion Source Type</label>
-                  <div style={{ display: "flex", gap: "10px" }}>
-                    <label
-                      className="btn btn-secondary"
-                      style={{
-                        flex: 1,
-                        backgroundColor: importType === "file" ? "var(--border-color)" : "transparent",
-                        borderColor: importType === "file" ? "var(--border-focus)" : "var(--border-color)",
-                      }}
-                      onClick={() => setImportType("file")}
-                    >
-                      📁 Upload Local ZIP Bundle
-                    </label>
-                    <label
-                      className="btn btn-secondary"
-                      style={{
-                        flex: 1,
-                        backgroundColor: importType === "git" ? "var(--border-color)" : "transparent",
-                        borderColor: importType === "git" ? "var(--border-focus)" : "var(--border-color)",
-                      }}
-                      onClick={() => setImportType("git")}
-                    >
-                      🔗 Enterprise Git Repository
-                    </label>
+                  {importError && (
+                    <div className="panel" style={{ borderColor: "var(--danger)", padding: "10px 14px", marginBottom: "14px" }}>
+                      <p style={{ color: "var(--danger)", fontSize: "12px", margin: 0 }}>{importError}</p>
+                    </div>
+                  )}
+
+                  {/* Import Type Toggle */}
+                  <div className="form-group">
+                    <label className="form-label">Ingestion Source Type</label>
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <label
+                        className="btn btn-secondary"
+                        style={{
+                          flex: 1,
+                          backgroundColor: importType === "file" ? "var(--border-color)" : "transparent",
+                          borderColor: importType === "file" ? "var(--border-focus)" : "var(--border-color)",
+                          cursor: "pointer"
+                        }}
+                        onClick={() => setImportType("file")}
+                      >
+                        📁 Upload Local ZIP Bundle
+                      </label>
+                      <label
+                        className="btn btn-secondary"
+                        style={{
+                          flex: 1,
+                          backgroundColor: importType === "git" ? "var(--border-color)" : "transparent",
+                          borderColor: importType === "git" ? "var(--border-focus)" : "var(--border-color)",
+                          cursor: "pointer"
+                        }}
+                        onClick={() => setImportType("git")}
+                      >
+                        🔗 Enterprise Git Repository
+                      </label>
+                    </div>
                   </div>
+
+                  {importType === "file" ? (
+                    <div className="form-group">
+                      <label className="form-label">Universal Capability ZIP Bundle</label>
+                      <input
+                        type="file"
+                        accept=".zip"
+                        ref={fileInputRef}
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) setSelectedFile(file);
+                        }}
+                      />
+                      <div style={{ display: "flex", gap: "10px" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => fileInputRef.current?.click()}
+                          style={{ flex: 1 }}
+                          id="btn-choose-bundle-zip"
+                        >
+                          Choose File
+                        </button>
+                        <span style={{ flex: 2, display: "flex", alignItems: "center", fontSize: "12px", color: "var(--text-secondary)" }}>
+                          {selectedFile ? selectedFile.name : "No file selected"}
+                        </span>
+                      </div>
+                      <span className="form-help">Optionally includes '.capability.json' in bundle root.</span>
+
+                      {/* Quick Demo Preloads */}
+                      <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-color)", paddingTop: "10px" }}>
+                        <label className="form-label" style={{ fontSize: "11px" }}>Local Demo Preloaded Bundles</label>
+                        <div style={{ display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: "4px 8px", fontSize: "11px" }}
+                            onClick={async () => {
+                              try {
+                                const res = await fetch("/mock_bundles/weather-agent-bundle.zip");
+                                const blob = await res.blob();
+                                const file = new File([blob], "weather-agent-v1.1.0.zip", { type: "application/zip" });
+                                setSelectedFile(file);
+                                setImportComment("Pushing v1.1.0 update to weather-agent bundle.");
+                                alert("Loaded preloaded Weather Agent (v1.1.0) test bundle!");
+                              } catch (e) {
+                                alert("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.");
+                              }
+                            }}
+                          >
+                            Weather Agent (Patch)
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: "4px 8px", fontSize: "11px" }}
+                            onClick={async () => {
+                              try {
+                                const res = await fetch("/mock_bundles/security-playbook-bundle.zip");
+                                const blob = await res.blob();
+                                const file = new File([blob], "security-playbook-v1.0.0.zip", { type: "application/zip" });
+                                setSelectedFile(file);
+                                setImportComment("Updating security playbook SOP to OAuth2 compliant v1.0.0.");
+                                alert("Loaded preloaded Security Playbook (v1.0.0) test bundle!");
+                              } catch (e) {
+                                alert("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.");
+                              }
+                            }}
+                          >
+                            Security Playbook (Update)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="form-group">
+                        <label className="form-label">Enterprise Repository Git URL</label>
+                        <input
+                          type="text"
+                          placeholder="https://github.corp.ema.ai/architecture/mcp-plugin"
+                          className="form-input"
+                          value={gitUrl}
+                          onChange={(e) => setGitUrl(e.target.value)}
+                          id="git-import-url"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Release Tag / Branch</label>
+                        <input
+                          type="text"
+                          placeholder="v1.2.0"
+                          className="form-input"
+                          value={gitTag}
+                          onChange={(e) => setGitTag(e.target.value)}
+                          id="git-import-tag"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {importType === "file" ? (
-                  <div className="form-group">
-                    <label className="form-label">Universal Capability ZIP Bundle</label>
-                    <input
-                      type="file"
-                      accept=".zip"
-                      ref={fileInputRef}
-                      style={{ display: "none" }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) setSelectedFile(file);
-                      }}
-                    />
-                    <div style={{ display: "flex", gap: "10px" }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => fileInputRef.current?.click()}
-                        style={{ flex: 1 }}
-                        id="btn-choose-bundle-zip"
-                      >
-                        Choose File
-                      </button>
-                      <span style={{ flex: 2, display: "flex", alignItems: "center", fontSize: "12px", color: "var(--text-secondary)" }}>
-                        {selectedFile ? selectedFile.name : "No file selected"}
-                      </span>
-                    </div>
-                    <span className="form-help">Must contain '.capability.json' in bundle root.</span>
+                <div className="modal-footer">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setIsImportModalOpen(false);
+                      setImportError(null);
+                      setSelectedFile(null);
+                      setGitUrl("");
+                      setGitTag("");
+                      setImportComment("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={importing}
+                    id="btn-submit-capability-form"
+                  >
+                    {importing ? "Processing..." : "Verify & Parse"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleImportConfirm}>
+                <div className="modal-body">
+                  <div style={{ fontSize: "11px", fontWeight: "700", textTransform: "uppercase", color: "var(--primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>Step 2 of 2:</span>
+                    <span style={{ color: "var(--text-muted)" }}>Verify Metadata & Governance</span>
+                  </div>
 
-                    {/* Quick Demo Preloads */}
-                    <div style={{ marginTop: "14px", borderTop: "1px solid var(--border-color)", paddingTop: "10px" }}>
-                      <label className="form-label" style={{ fontSize: "11px" }}>Local Demo Preloaded Bundles</label>
-                      <div style={{ display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: "4px 8px", fontSize: "11px" }}
-                          onClick={async () => {
-                            // Fetch mock zip from generated folder and set it
-                            try {
-                              // We simulate uploading weather-agent at higher version or security playbook
-                              const res = await fetch("/mock_bundles/weather-agent-bundle.zip");
-                              const blob = await res.blob();
-                              const file = new File([blob], "weather-agent-v1.1.0-patch.zip", { type: "application/zip" });
-                              setSelectedFile(file);
-                              setImportComment("Pushing v1.1.0 update to weather-agent bundle.");
-                              alert("Loaded preloaded Weather Agent (Patch v1.1.0) test bundle!");
-                            } catch (e) {
-                              alert("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.");
-                            }
-                          }}
-                        >
-                          Weather Agent (Patch)
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: "4px 8px", fontSize: "11px" }}
-                          onClick={async () => {
-                            try {
-                              const res = await fetch("/mock_bundles/security-playbook-bundle.zip");
-                              const blob = await res.blob();
-                              const file = new File([blob], "security-playbook-v1.0.0.zip", { type: "application/zip" });
-                              setSelectedFile(file);
-                              setImportComment("Updating security playbook SOP to OAuth2 compliant v1.0.0.");
-                              alert("Loaded preloaded Security Playbook (v1.0.0) test bundle!");
-                            } catch (e) {
-                              alert("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.");
-                            }
-                          }}
-                        >
-                          Security Playbook (Update)
-                        </button>
+                  {importError && (
+                    <div className="panel" style={{ borderColor: "var(--danger)", padding: "10px 14px", margin: "12px 0" }}>
+                      <p style={{ color: "var(--danger)", fontSize: "12px", margin: 0 }}>{importError}</p>
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "12px" }}>
+                    {parsedMetadata?.hasManifest ? (
+                      <div className="panel" style={{ borderColor: "var(--success)", backgroundColor: "rgba(16, 185, 129, 0.03)", padding: "10px 14px", margin: 0 }}>
+                        <p style={{ color: "var(--success)", fontSize: "12px", fontWeight: "600", margin: 0 }}>
+                          ✓ MASTER CONFIGURATION DETECTED: Found '.capability.json' in bundle root. You can review and edit the entries below.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="panel" style={{ borderColor: "var(--warning)", backgroundColor: "rgba(245, 158, 11, 0.03)", padding: "10px 14px", margin: 0 }}>
+                        <p style={{ color: "var(--warning)", fontSize: "12px", fontWeight: "600", margin: 0 }}>
+                          ⚠️ MISSING MASTER CONFIGURATION: No '.capability.json' manifest was found in the bundle root. Please enter the required capability metadata below to register it.
+                        </p>
+                      </div>
+                    )}
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label">Capability Name *</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. model-developer"
+                          className="form-input"
+                          value={enteredName}
+                          onChange={(e) => setEnteredName(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label">Semantic Version *</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. 1.0.0"
+                          className="form-input"
+                          value={enteredVersion}
+                          onChange={(e) => setEnteredVersion(e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label">Registered Owner *</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Quantitative Research Team"
+                          className="form-input"
+                          value={enteredOwner}
+                          onChange={(e) => setEnteredOwner(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label">Derived Type (Governance)</label>
+                        <div style={{ display: "flex", alignItems: "center", height: "38px" }}>
+                          <span className={`badge badge-${enteredType.toLowerCase()}`} style={{ padding: "4px 10px", fontSize: "11px" }}>
+                            {enteredType}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Description *</label>
+                      <textarea
+                        placeholder="Describe what this capability does..."
+                        className="form-textarea"
+                        value={enteredDescription}
+                        onChange={(e) => setEnteredDescription(e.target.value)}
+                        required
+                        style={{ height: "60px" }}
+                      />
+                    </div>
+
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Client Harnesses Compatibility (Select at least one) *</label>
+                      <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap" }}>
+                        {[
+                          { id: "claude", label: "Claude Code" },
+                          { id: "opencode", label: "OpenCode" },
+                          { id: "codex", label: "Codex/CLI" },
+                          { id: "ghcp", label: "GHCP Agent" }
+                        ].map((h) => (
+                          <label key={h.id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={enteredHarnesses.includes(h.id) || (h.id === "ghcp" && enteredHarnesses.includes("github-copilot"))}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEnteredHarnesses(prev => [...prev, h.id]);
+                                } else {
+                                  setEnteredHarnesses(prev => prev.filter(x => x !== h.id && (h.id !== "ghcp" || x !== "github-copilot")));
+                                }
+                              }}
+                            />
+                            {h.label}
+                          </label>
+                        ))}
                       </div>
                     </div>
                   </div>
-                ) : (
-                  <>
-                    <div className="form-group">
-                      <label className="form-label">Enterprise Repository Git URL</label>
-                      <input
-                        type="text"
-                        placeholder="https://github.corp.ema.ai/architecture/mcp-plugin"
-                        className="form-input"
-                        value={gitUrl}
-                        onChange={(e) => setGitUrl(e.target.value)}
-                        id="git-import-url"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Release Tag / Branch</label>
-                      <input
-                        type="text"
-                        placeholder="v1.2.0"
-                        className="form-input"
-                        value={gitTag}
-                        onChange={(e) => setGitTag(e.target.value)}
-                        id="git-import-tag"
-                      />
-                    </div>
-                  </>
-                )}
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Submission & Review Comments</label>
-                  <textarea
-                    placeholder="Provide details about the change history, prompt security additions, or skill execution constraints..."
-                    className="form-textarea"
-                    value={importComment}
-                    onChange={(e) => setImportComment(e.target.value)}
-                    id="import-comment-textarea"
-                  />
+                  <div className="form-group" style={{ marginTop: "14px", marginBottom: 0 }}>
+                    <label className="form-label">Submission & Review Comments</label>
+                    <textarea
+                      placeholder="Provide details about the change history, prompt security additions, or skill execution constraints..."
+                      className="form-textarea"
+                      value={importComment}
+                      onChange={(e) => setImportComment(e.target.value)}
+                      id="import-comment-textarea"
+                      style={{ height: "50px" }}
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setIsImportModalOpen(false);
-                    setImportError(null);
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={importing}
-                  id="btn-submit-capability-form"
-                >
-                  {importing ? "Processing..." : "Verify & Import"}
-                </button>
-              </div>
-            </form>
+                <div className="modal-footer">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setImportStep("upload");
+                      setImportError(null);
+                    }}
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={importing}
+                  >
+                    {importing ? "Importing..." : "Confirm & Import"}
+                  </button>
+                </div>
+              </form>
+            )}
 
           </div>
         </div>

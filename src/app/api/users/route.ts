@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { hashPassword } from "@/lib/auth";
+import { hashPassword, verifyPassword } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
@@ -65,3 +65,77 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message || "Failed to create user" }, { status: 400 });
   }
 }
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const simulatedUser = req.headers.get("x-simulated-user") || "";
+    const rolesHeader = req.headers.get("x-simulated-roles") || "";
+    const isAdmin = rolesHeader.split(",").includes("ADMIN");
+
+    const { userId, oldPassword, password, confirmPassword } = await req.json();
+    if (!password || !confirmPassword) {
+      return NextResponse.json({ error: "New Password and Confirm Password are required." }, { status: 400 });
+    }
+
+    if (password !== confirmPassword) {
+      return NextResponse.json({ error: "New passwords do not match." }, { status: 400 });
+    }
+
+    // Resolve user either by userId or by simulatedUser (if self-updating)
+    let targetUser = null;
+    if (userId) {
+      targetUser = await prisma.user.findUnique({
+        where: { id: userId }
+      });
+    } else if (simulatedUser) {
+      targetUser = await prisma.user.findUnique({
+        where: { username: simulatedUser.toLowerCase() }
+      });
+    }
+
+    if (!targetUser) {
+      return NextResponse.json({ error: "User not found." }, { status: 404 });
+    }
+
+    // Authorization checks:
+    // Either the requester is an admin, OR they are updating their own password.
+    const isSelfUpdate = targetUser.username.toLowerCase() === simulatedUser.toLowerCase();
+
+    if (!isAdmin && !isSelfUpdate) {
+      return NextResponse.json({ error: "Access Denied: Admin role required or you can only update your own password." }, { status: 403 });
+    }
+
+    // If it is a self-update, the old password is strictly required and must match the current password hash in the database
+    if (isSelfUpdate) {
+      if (!oldPassword) {
+        return NextResponse.json({ error: "Old password is required for self password update." }, { status: 400 });
+      }
+      
+      const isOldPasswordCorrect = verifyPassword(oldPassword, targetUser.passwordHash);
+      if (!isOldPasswordCorrect) {
+        return NextResponse.json({ error: "Incorrect old password." }, { status: 400 });
+      }
+    }
+
+    // Hash and save the new password
+    const passwordHash = hashPassword(password);
+
+    const updatedUser = await prisma.user.update({
+      where: { id: targetUser.id },
+      data: {
+        passwordHash
+      },
+      select: {
+        id: true,
+        username: true,
+        roles: true,
+        createdAt: true
+      }
+    });
+
+    return NextResponse.json(updatedUser);
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || "Failed to update user password" }, { status: 400 });
+  }
+}
+
