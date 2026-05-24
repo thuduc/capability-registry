@@ -107,10 +107,6 @@ export async function PATCH(
     // Perform regular state updates
     if (nextStatus !== currentStatus) {
       if (nextStatus === "ACTIVE") {
-        // Enforce dual-active exclusion: only ONE version of a capability can be ACTIVE.
-        // If this version is set to ACTIVE, set all other active versions of this capability to INACTIVE
-        const activeVersions = version.capability.versions.filter((v) => v.status === "ACTIVE" && v.id !== versionId);
-        
         // Connect tags to the capability if tagIds is passed
         const tagConnect = body.tagIds && Array.isArray(body.tagIds)
           ? { tags: { set: body.tagIds.map((id: string) => ({ id })) } }
@@ -127,12 +123,6 @@ export async function PATCH(
               data: tagConnect,
             })
           ] : []),
-          ...activeVersions.map((v) =>
-            prisma.capabilityVersion.update({
-              where: { id: v.id },
-              data: { status: "INACTIVE" },
-            })
-          ),
           prisma.reviewComment.create({
             data: {
               versionId,
