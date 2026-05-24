@@ -1,0 +1,59 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Capability {
+  id          String              @id @default(uuid())
+  name        String              @unique
+  description String
+  type        String              // AGENT, PLUGIN, SKILL
+  owner       String
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  versions    CapabilityVersion[]
+  tags        Tag[]
+}
+
+model CapabilityVersion {
+  id            String          @id @default(uuid())
+  capabilityId  String
+  capability    Capability      @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  version       String          // strict semver, e.g. "1.0.0"
+  status        String          // DRAFT, PENDING_REVIEW, ACTIVE, INACTIVE, REJECTED
+  zipPath       String          // File system path to the original zip
+  extractedPath String          // File system path to the extracted contents
+  harnesses     String          // JSON array of strings (e.g. '["claude", "github-copilot"]')
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  comments      ReviewComment[]
+}
+
+model ReviewComment {
+  id        String            @id @default(uuid())
+  versionId String
+  version   CapabilityVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  author    String            // Developer, Admin
+  text      String
+  createdAt DateTime          @default(now())
+}
+
+model Tag {
+  id           String       @id @default(uuid())
+  name         String       @unique
+  color        String       // HSL or Hex string, e.g. "var(--primary-teal)"
+  description  String?
+  capabilities Capability[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  roles        String   // Comma-separated list e.g. "USER,ADMIN"
+  createdAt    DateTime @default(now())
+}
+

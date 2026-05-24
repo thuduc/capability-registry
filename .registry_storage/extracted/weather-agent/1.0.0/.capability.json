@@ -1,0 +1,10 @@
+{
+  "name": "weather-agent",
+  "description": "An enterprise GenAI Agent for weather intelligence, climate alerts, and data querying.",
+  "version": "1.0.0",
+  "owner": "Weather Implementations Team",
+  "harnesses": [
+    "github-copilot",
+    "claude"
+  ]
+}

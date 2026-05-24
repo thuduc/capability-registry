@@ -1,0 +1,9 @@
+{
+  "name": "database-plugin",
+  "description": "An Model Context Protocol (MCP) Plugin for secure database schema introspection and query optimization.",
+  "version": "2.1.0",
+  "owner": "Data Infrastructure Group",
+  "harnesses": [
+    "claude"
+  ]
+}

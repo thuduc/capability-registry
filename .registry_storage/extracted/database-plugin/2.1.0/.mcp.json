@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "database-plugin": {
+      "command": "node",
+      "args": [
+        "dist/mcp-server.js"
+      ],
+      "env": {
+        "DB_READONLY": "true"
+      }
+    }
+  }
+}

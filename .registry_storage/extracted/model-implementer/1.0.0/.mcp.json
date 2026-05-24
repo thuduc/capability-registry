@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "model-implementer": {
+      "command": "node",
+      "args": [
+        "dist/mcp-server.js"
+      ],
+      "env": {
+        "DEPLOYMENT_TARGET": "production-kubernetes"
+      }
+    }
+  }
+}

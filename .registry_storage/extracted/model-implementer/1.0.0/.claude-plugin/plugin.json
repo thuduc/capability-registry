@@ -1,0 +1,6 @@
+{
+  "id": "model-implementer",
+  "name": "Model Implementer Plugin",
+  "version": "1.0.0",
+  "description": "Production code synthesis and SDLC deployment review harness integration."
+}
