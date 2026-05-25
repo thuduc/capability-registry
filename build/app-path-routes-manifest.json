@@ -1,0 +1,18 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/capabilities/[id]/route": "/api/capabilities/[id]",
+  "/api/capabilities/parse/route": "/api/capabilities/parse",
+  "/api/capabilities/route": "/api/capabilities",
+  "/api/capabilities/versions/[versionId]/comments/route": "/api/capabilities/versions/[versionId]/comments",
+  "/api/capabilities/versions/[versionId]/diff/route": "/api/capabilities/versions/[versionId]/diff",
+  "/api/capabilities/versions/[versionId]/download/route": "/api/capabilities/versions/[versionId]/download",
+  "/api/capabilities/versions/[versionId]/files/route": "/api/capabilities/versions/[versionId]/files",
+  "/api/capabilities/versions/[versionId]/status/route": "/api/capabilities/versions/[versionId]/status",
+  "/api/install/[name]/[version]/route": "/api/install/[name]/[version]",
+  "/api/login/route": "/api/login",
+  "/api/tags/[id]/route": "/api/tags/[id]",
+  "/api/tags/route": "/api/tags",
+  "/api/users/route": "/api/users",
+  "/page": "/"
+}
