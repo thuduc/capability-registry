@@ -1,20 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { processCapabilityZip, saveExtractedCapability } from "@/lib/ingestion";
+import { processCapabilityZip, saveExtractedCapability, cleanAndNormalizeZip } from "@/lib/ingestion";
 import AdmZip from "adm-zip";
 
 export async function GET(req: NextRequest) {
   try {
-    const userHeader = req.headers.get("x-simulated-user") || "";
-    if (!userHeader) {
-      return NextResponse.json({ error: "Access Denied: Login required." }, { status: 401 });
+    const { searchParams } = new URL(req.url);
+    const viewMode = searchParams.get("viewMode") || "public"; // public, developer, admin
+
+    if (viewMode !== "public") {
+      const userHeader = req.headers.get("x-simulated-user") || "";
+      if (!userHeader) {
+        return NextResponse.json({ error: "Access Denied: Login required." }, { status: 401 });
+      }
+
+      if (viewMode === "admin") {
+        const rolesHeader = req.headers.get("x-simulated-roles") || "";
+        if (!rolesHeader.split(",").includes("ADMIN")) {
+          return NextResponse.json({ error: "Access Denied: Admin role required." }, { status: 403 });
+        }
+      }
     }
 
-    const { searchParams } = new URL(req.url);
     const search = searchParams.get("search") || "";
     const type = searchParams.get("type") || "";
     const harness = searchParams.get("harness") || "";
-    const viewMode = searchParams.get("viewMode") || "public"; // public, developer, admin
 
     // 1. Fetch capabilities
     const capabilities = await prisma.capability.findMany({
@@ -144,6 +154,8 @@ export async function POST(req: NextRequest) {
     } else {
       return NextResponse.json({ error: "Either a ZIP file or Git Repository URL + Tag must be provided." }, { status: 400 });
     }
+    // Normalize and clean ZIP structure
+    zipBuffer = cleanAndNormalizeZip(zipBuffer);
 
     let parsedData: any;
 
@@ -172,14 +184,18 @@ export async function POST(req: NextRequest) {
       for (const harness of harnesses) {
         const normalizedHarness = harness.toLowerCase();
         if (normalizedHarness === "claude" || normalizedHarness === "opencode" || normalizedHarness === "codex") {
-          const hasPluginJson = filePaths.some((p) => p.endsWith(".claude-plugin/plugin.json"));
-          if (!hasPluginJson) {
-            return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared, but missing '.claude-plugin/plugin.json' in bundle.` }, { status: 400 });
+          const hasPluginJson = filePaths.some((p) => p.endsWith("plugin.json"));
+          const hasAgentFile = filePaths.some((p) => p.includes("agents/"));
+          const hasSkillFile = filePaths.some((p) => p.includes("skills/"));
+          if (!hasPluginJson && !hasAgentFile && !hasSkillFile) {
+            return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared, but bundle does not contain a plugin (plugin.json), agent (under agents/), or skill (under skills/).` }, { status: 400 });
           }
         } else if (normalizedHarness === "github-copilot" || normalizedHarness === "github-copilot-agent" || normalizedHarness === "ghcp") {
-          const hasCopilotAgent = filePaths.some((p) => p.endsWith(".github/agents/profile.agent.md"));
-          if (!hasCopilotAgent) {
-            return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared, but missing '.github/agents/profile.agent.md' in bundle.` }, { status: 400 });
+          if (parsedData.type === "AGENT") {
+            const hasCopilotAgent = filePaths.some((p) => p.includes(".github/agents/") && p.endsWith(".agent.md"));
+            if (!hasCopilotAgent) {
+              return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared for Agent capability, but missing a '.agent.md' file under '.github/agents/' folder.` }, { status: 400 });
+            }
           }
         }
       }
@@ -199,11 +215,12 @@ export async function POST(req: NextRequest) {
       );
 
       if (manifestEntry) {
-        // Overwrite the existing file in the zip
-        zip.deleteFile(manifestEntry.entryName);
+        // Overwrite the existing file in place
+        manifestEntry.setData(Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
+      } else {
+        // Add the new manifest (always at the root '.capability.json')
+        zip.addFile(".capability.json", Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
       }
-      // Add the new manifest (always at the root '.capability.json')
-      zip.addFile(".capability.json", Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
       zipBuffer = zip.toBuffer();
     } else {
       // Fallback: parse manifest directly from the ZIP
@@ -245,12 +262,13 @@ export async function POST(req: NextRequest) {
       });
       capabilityId = cap.id;
     } else {
-      // Update description or owner if they changed
+      // Update description, owner, and type if they changed
       await prisma.capability.update({
         where: { id: capabilityId },
         data: {
           description: parsedData.description,
           owner: parsedData.owner,
+          type: parsedData.type,
         },
       });
     }

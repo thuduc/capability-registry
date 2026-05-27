@@ -76,6 +76,15 @@ export default function Home() {
   const [loginPassword, setLoginPassword] = useState<string>("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [authenticating, setAuthenticating] = useState<boolean>(false);
+
+  // --- Registration & Modal States ---
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
+  const [loginModalTab, setLoginModalTab] = useState<"login" | "register">("login");
+  const [registerUsername, setRegisterUsername] = useState<string>("");
+  const [registerPassword, setRegisterPassword] = useState<string>("");
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState<string>("");
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registering, setRegistering] = useState<boolean>(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState<boolean>(false);
   const [origin, setOrigin] = useState("http://localhost:3000");
@@ -222,9 +231,7 @@ export default function Home() {
 
   // Trigger fetch when parameters or role changes
   useEffect(() => {
-    if (isAuthenticated) {
-      fetchCapabilities();
-    }
+    fetchCapabilities();
   }, [viewMode, search, selectedType, selectedHarness, selectedStatus, currentUser, sessionRoles, isAuthenticated]);
 
   // Fetch Diff files for Pending Reviews
@@ -697,11 +704,81 @@ export default function Home() {
       setIsAuthenticated(true);
       setLoginUsername("");
       setLoginPassword("");
+      setIsLoginModalOpen(false);
     } catch (err: any) {
       console.error(err);
       setLoginError(err.message || "Invalid username or password.");
     } finally {
       setAuthenticating(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!registerUsername.trim() || !registerPassword.trim() || !registerConfirmPassword.trim()) {
+      setRegisterError("All registration fields are required.");
+      return;
+    }
+
+    if (registerPassword !== registerConfirmPassword) {
+      setRegisterError("Passwords do not match.");
+      return;
+    }
+
+    if (registerPassword.length < 6) {
+      setRegisterError("Password must be at least 6 characters long.");
+      return;
+    }
+
+    setRegistering(true);
+    setRegisterError(null);
+
+    try {
+      const res = await fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: registerUsername.trim(),
+          password: registerPassword,
+          confirmPassword: registerConfirmPassword,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Registration failed.");
+      }
+
+      // Success! Automatically log them in!
+      const loginRes = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: registerUsername.trim(),
+          password: registerPassword,
+        }),
+      });
+
+      const loginData = await loginRes.json();
+      if (!loginRes.ok) {
+        throw new Error(loginData.error || "Registration succeeded but automatic login failed.");
+      }
+
+      setCurrentUser(loginData.username);
+      setSessionRoles(loginData.roles.split(","));
+      setIsAuthenticated(true);
+      setIsLoginModalOpen(false);
+
+      // Reset form fields
+      setRegisterUsername("");
+      setRegisterPassword("");
+      setRegisterConfirmPassword("");
+      alert("Registration completed successfully! Welcome, " + loginData.username);
+    } catch (err: any) {
+      console.error(err);
+      setRegisterError(err.message || "An unexpected registration error occurred.");
+    } finally {
+      setRegistering(false);
     }
   };
 
@@ -712,6 +789,8 @@ export default function Home() {
     setCapabilities([]);
     setSelectedCapability(null);
     setSelectedVersion(null);
+    setActiveTab("catalog");
+    setViewMode("public");
   };
 
   // Generate dynamic installation commands based on tab selection
@@ -782,21 +861,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      if (activeTab !== "catalog") {
+        setActiveTab("catalog");
+      }
+      if (viewMode !== "public") {
+        setViewMode("public");
+      }
+      return;
+    }
+
     const selected = systemUsers.find(u => u.username === currentUser);
     if (selected) {
       const roles = selected.roles.split(",");
       setSessionRoles(roles);
-      // Auto-revert if standard user in admin sections
-      if (!roles.includes("ADMIN")) {
-        if (activeTab === "tags" || activeTab === "users") {
-          setActiveTab("catalog");
-        }
-        if (viewMode === "admin") {
-          setViewMode("public");
-        }
+    }
+  }, [currentUser, systemUsers, isAuthenticated, activeTab, viewMode]);
+
+  useEffect(() => {
+    if (isAuthenticated && !sessionRoles.includes("ADMIN")) {
+      if (activeTab === "tags" || activeTab === "users") {
+        setActiveTab("catalog");
+      }
+      if (viewMode === "admin") {
+        setViewMode("developer");
       }
     }
-  }, [currentUser, systemUsers]);
+  }, [isAuthenticated, sessionRoles, activeTab, viewMode]);
 
   useEffect(() => {
     if (activeTab === "users" && sessionRoles.includes("ADMIN")) {
@@ -998,61 +1089,7 @@ export default function Home() {
     return `curl -fsSL ${origin}/api/install/${capName}/${verStr} | bash`;
   };
 
-  if (!isAuthenticated) {
-    return (
-      <div className="login-overlay">
-        <div className="login-card">
-          <div className="login-brand">
-            <div className="login-brand-logo">EMA</div>
-            <h2 className="login-title">GenAI Capability Registry</h2>
-          </div>
 
-          <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            {loginError && (
-              <div className="panel" style={{ padding: "10px", borderColor: "var(--danger)", backgroundColor: "rgba(239, 68, 68, 0.05)", margin: 0 }}>
-                <p style={{ color: "var(--danger)", fontSize: "12px", fontWeight: "600", textAlign: "center", margin: 0 }}>
-                  ⚠️ {loginError}
-                </p>
-              </div>
-            )}
-
-            <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">Username</label>
-              <input
-                type="text"
-                placeholder="Enter username..."
-                className="form-input"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">Password</label>
-              <input
-                type="password"
-                placeholder="Enter password..."
-                className="form-input"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ width: "100%", padding: "12px", fontSize: "14px", fontWeight: "700", marginTop: "8px" }}
-              disabled={authenticating}
-            >
-              {authenticating ? "Authenticating..." : "Login"}
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="app-container">
@@ -1080,40 +1117,46 @@ export default function Home() {
           >
             <span>🌐</span> {!isSidebarCollapsed && "Standard Catalog"}
           </div>
-          <div
-            className={`sidebar-nav-item ${activeTab === "catalog" && viewMode === "developer" ? "active" : ""}`}
-            onClick={() => { setActiveTab("catalog"); setViewMode("developer"); }}
-            style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
-            title={isSidebarCollapsed ? "Developer Workspace" : ""}
-          >
-            <span>🛠️</span> {!isSidebarCollapsed && "Developer Workspace"}
-          </div>
-          <div
-            className={`sidebar-nav-item ${activeTab === "catalog" && viewMode === "admin" ? "active" : ""} ${!sessionRoles.includes("ADMIN") ? "disabled" : ""}`}
-            onClick={() => { if (sessionRoles.includes("ADMIN")) { setActiveTab("catalog"); setViewMode("admin"); } }}
-            style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
-            title={isSidebarCollapsed ? "Admin Workspace" : (!sessionRoles.includes("ADMIN") ? "Admin permissions required" : "")}
-          >
-            <span>🛡️</span> {!isSidebarCollapsed && "Admin Workspace"}
-          </div>
+          {isAuthenticated && (
+            <div
+              className={`sidebar-nav-item ${activeTab === "catalog" && viewMode === "developer" ? "active" : ""}`}
+              onClick={() => { setActiveTab("catalog"); setViewMode("developer"); }}
+              style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
+              title={isSidebarCollapsed ? "Developer Workspace" : ""}
+            >
+              <span>🛠️</span> {!isSidebarCollapsed && "Developer Workspace"}
+            </div>
+          )}
+          {isAuthenticated && sessionRoles.includes("ADMIN") && (
+            <>
+              <div
+                className={`sidebar-nav-item ${activeTab === "catalog" && viewMode === "admin" ? "active" : ""}`}
+                onClick={() => { setActiveTab("catalog"); setViewMode("admin"); }}
+                style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
+                title={isSidebarCollapsed ? "Admin Workspace" : ""}
+              >
+                <span>🛡️</span> {!isSidebarCollapsed && "Admin Workspace"}
+              </div>
 
-          {!isSidebarCollapsed && <div className="sidebar-nav-header">Management</div>}
-          <div
-            className={`sidebar-nav-item ${activeTab === "tags" ? "active" : ""} ${!sessionRoles.includes("ADMIN") ? "disabled" : ""}`}
-            onClick={() => { if (sessionRoles.includes("ADMIN")) setActiveTab("tags"); }}
-            style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
-            title={isSidebarCollapsed ? "Manage Tags" : (!sessionRoles.includes("ADMIN") ? "Admin permissions required" : "")}
-          >
-            <span>🏷️</span> {!isSidebarCollapsed && "Manage Tags"}
-          </div>
-          <div
-            className={`sidebar-nav-item ${activeTab === "users" ? "active" : ""} ${!sessionRoles.includes("ADMIN") ? "disabled" : ""}`}
-            onClick={() => { if (sessionRoles.includes("ADMIN")) setActiveTab("users"); }}
-            style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
-            title={isSidebarCollapsed ? "Manage Users" : (!sessionRoles.includes("ADMIN") ? "Admin permissions required" : "")}
-          >
-            <span>👥</span> {!isSidebarCollapsed && "Manage Users"}
-          </div>
+              {!isSidebarCollapsed && <div className="sidebar-nav-header">Management</div>}
+              <div
+                className={`sidebar-nav-item ${activeTab === "tags" ? "active" : ""}`}
+                onClick={() => { setActiveTab("tags"); }}
+                style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
+                title={isSidebarCollapsed ? "Manage Tags" : ""}
+              >
+                <span>🏷️</span> {!isSidebarCollapsed && "Manage Tags"}
+              </div>
+              <div
+                className={`sidebar-nav-item ${activeTab === "users" ? "active" : ""}`}
+                onClick={() => { setActiveTab("users"); }}
+                style={{ justifyContent: isSidebarCollapsed ? "center" : "flex-start", padding: isSidebarCollapsed ? "10px 0" : "10px 12px" }}
+                title={isSidebarCollapsed ? "Manage Users" : ""}
+              >
+                <span>👥</span> {!isSidebarCollapsed && "Manage Users"}
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -1149,152 +1192,166 @@ export default function Home() {
 
             {/* Premium Profile Dropdown */}
             <div style={{ display: "flex", alignItems: "center", borderLeft: "1px solid var(--border-color)", paddingLeft: "16px" }}>
-              <div style={{ position: "relative", display: "inline-block" }}>
-                <button
-                  type="button"
-                  onClick={() => setIsProfileDropdownOpen(!isProfileDropdownOpen)}
-                  style={{ 
-                    display: "flex", 
-                    alignItems: "center", 
-                    gap: "6px", 
-                    background: "none", 
-                    border: "none", 
-                    cursor: "pointer", 
-                    padding: "4px 8px",
-                    borderRadius: "var(--radius-md)",
-                    transition: "all 0.15s ease",
-                    outline: "none"
-                  }}
-                  onMouseOver={(e) => { e.currentTarget.style.backgroundColor = "var(--primary-light)"; }}
-                  onMouseOut={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-                  title="User Profile Options"
-                >
-                  <div className="user-avatar" style={{ 
-                    width: "28px", 
-                    height: "28px", 
-                    borderRadius: "50%", 
-                    background: "linear-gradient(135deg, var(--primary), var(--primary-hover))", 
-                    color: "#ffffff", 
-                    display: "flex", 
-                    alignItems: "center", 
-                    justifyContent: "center", 
-                    fontWeight: "800", 
-                    fontSize: "11px",
-                    boxShadow: "0 2px 4px rgba(0, 122, 135, 0.15)"
-                  }}>
-                    {currentUser ? currentUser.substring(0, 2).toUpperCase() : "U"}
-                  </div>
-                  <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "2px" }}>▼</span>
-                </button>
-
-                {isProfileDropdownOpen && (
-                  <>
-                    {/* Backdrop overlay to close dropdown on outer clicks */}
-                    <div 
-                      onClick={() => setIsProfileDropdownOpen(false)}
-                      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 998 }}
-                    />
-                    {/* Dropdown panel */}
-                    <div style={{ 
-                      position: "absolute", 
-                      right: 0, 
-                      marginTop: "8px", 
-                      width: "180px", 
-                      backgroundColor: "var(--bg-secondary)", 
-                      border: "1px solid var(--border-color)", 
-                      borderRadius: "var(--radius-md)", 
-                      boxShadow: "var(--shadow-lg)", 
-                      zIndex: 999,
-                      padding: "12px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "8px",
-                      boxSizing: "border-box"
+              {isAuthenticated ? (
+                <div style={{ position: "relative", display: "inline-block" }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsProfileDropdownOpen(!isProfileDropdownOpen)}
+                    style={{ 
+                      display: "flex", 
+                      alignItems: "center", 
+                      gap: "6px", 
+                      background: "none", 
+                      border: "none", 
+                      cursor: "pointer", 
+                      padding: "4px 8px",
+                      borderRadius: "var(--radius-md)",
+                      transition: "all 0.15s ease",
+                      outline: "none"
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.backgroundColor = "var(--primary-light)"; }}
+                    onMouseOut={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                    title="User Profile Options"
+                  >
+                    <div className="user-avatar" style={{ 
+                      width: "28px", 
+                      height: "28px", 
+                      borderRadius: "50%", 
+                      background: "linear-gradient(135deg, var(--primary), var(--primary-hover))", 
+                      color: "#ffffff", 
+                      display: "flex", 
+                      alignItems: "center", 
+                      justifyContent: "center", 
+                      fontWeight: "800", 
+                      fontSize: "11px",
+                      boxShadow: "0 2px 4px rgba(0, 122, 135, 0.15)"
                     }}>
-                      <div style={{ display: "flex", flexDirection: "column", lineHeight: "1.2" }}>
-                        <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-primary)" }}>{currentUser}</span>
-                        <span style={{ fontSize: "9px", color: "var(--text-muted)", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.03em", marginTop: "2px" }}>
-                          {sessionRoles.includes("ADMIN") ? "Administrator" : "Standard User"}
-                        </span>
-                      </div>
-                      
-                      <div style={{ height: "1px", backgroundColor: "var(--border-color)", margin: "4px 0" }} />
-                      
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsProfileDropdownOpen(false);
-                          setIsSelfPasswordOpen(true);
-                        }}
-                        style={{ 
-                          fontSize: "10px", 
-                          color: "var(--text-primary)", 
-                          backgroundColor: "transparent",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: "var(--radius-sm)",
-                          padding: "6px 10px",
-                          display: "flex", 
-                          alignItems: "center", 
-                          justifyContent: "center",
-                          gap: "6px", 
-                          fontWeight: "700",
-                          cursor: "pointer",
-                          transition: "all 0.15s ease",
-                          width: "100%",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
-                          boxSizing: "border-box"
-                        }}
-                        onMouseOver={(e) => {
-                          e.currentTarget.style.backgroundColor = "var(--primary-light)";
-                        }}
-                        onMouseOut={(e) => {
-                          e.currentTarget.style.backgroundColor = "transparent";
-                        }}
-                      >
-                        🔑 Update Password
-                      </button>
-                      
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsProfileDropdownOpen(false);
-                          handleLogout();
-                        }}
-                        style={{ 
-                          fontSize: "10px", 
-                          color: "var(--danger)", 
-                          backgroundColor: "rgba(239, 68, 68, 0.05)",
-                          border: "1px solid rgba(239, 68, 68, 0.12)",
-                          borderRadius: "var(--radius-sm)",
-                          padding: "6px 10px",
-                          display: "flex", 
-                          alignItems: "center", 
-                          justifyContent: "center",
-                          gap: "6px", 
-                          fontWeight: "700",
-                          cursor: "pointer",
-                          transition: "all 0.15s ease",
-                          width: "100%",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
-                          boxSizing: "border-box"
-                        }}
-                        onMouseOver={(e) => {
-                          e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.12)";
-                          e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
-                        }}
-                        onMouseOut={(e) => {
-                          e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.05)";
-                          e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.12)";
-                        }}
-                      >
-                        <span>🔒</span> Logout
-                      </button>
+                      {currentUser ? currentUser.substring(0, 2).toUpperCase() : "U"}
                     </div>
-                  </>
-                )}
-              </div>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "2px" }}>▼</span>
+                  </button>
+
+                  {isProfileDropdownOpen && (
+                    <>
+                      {/* Backdrop overlay to close dropdown on outer clicks */}
+                      <div 
+                        onClick={() => setIsProfileDropdownOpen(false)}
+                        style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 998 }}
+                      />
+                      {/* Dropdown panel */}
+                      <div style={{ 
+                        position: "absolute", 
+                        right: 0, 
+                        marginTop: "8px", 
+                        width: "180px", 
+                        backgroundColor: "var(--bg-secondary)", 
+                        border: "1px solid var(--border-color)", 
+                        borderRadius: "var(--radius-md)", 
+                        boxShadow: "var(--shadow-lg)", 
+                        zIndex: 999,
+                        padding: "12px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                        boxSizing: "border-box"
+                      }}>
+                        <div style={{ display: "flex", flexDirection: "column", lineHeight: "1.2" }}>
+                          <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-primary)" }}>{currentUser}</span>
+                          <span style={{ fontSize: "9px", color: "var(--text-muted)", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.03em", marginTop: "2px" }}>
+                            {sessionRoles.includes("ADMIN") ? "Administrator" : "Standard User"}
+                          </span>
+                        </div>
+                        
+                        <div style={{ height: "1px", backgroundColor: "var(--border-color)", margin: "4px 0" }} />
+                        
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsProfileDropdownOpen(false);
+                            setIsSelfPasswordOpen(true);
+                          }}
+                          style={{ 
+                            fontSize: "10px", 
+                            color: "var(--text-primary)", 
+                            backgroundColor: "transparent",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "var(--radius-sm)",
+                            padding: "6px 10px",
+                            display: "flex", 
+                            alignItems: "center", 
+                            justifyContent: "center",
+                            gap: "6px", 
+                            fontWeight: "700",
+                            cursor: "pointer",
+                            transition: "all 0.15s ease",
+                            width: "100%",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                            boxSizing: "border-box"
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.backgroundColor = "var(--primary-light)";
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.backgroundColor = "transparent";
+                          }}
+                        >
+                          🔑 Update Password
+                        </button>
+                        
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsProfileDropdownOpen(false);
+                            handleLogout();
+                          }}
+                          style={{ 
+                            fontSize: "10px", 
+                            color: "var(--danger)", 
+                            backgroundColor: "rgba(239, 68, 68, 0.05)",
+                            border: "1px solid rgba(239, 68, 68, 0.12)",
+                            borderRadius: "var(--radius-sm)",
+                            padding: "6px 10px",
+                            display: "flex", 
+                            alignItems: "center", 
+                            justifyContent: "center",
+                            gap: "6px", 
+                            fontWeight: "700",
+                            cursor: "pointer",
+                            transition: "all 0.15s ease",
+                            width: "100%",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                            boxSizing: "border-box"
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.12)";
+                            e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.05)";
+                            e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.12)";
+                          }}
+                        >
+                          <span>🔒</span> Logout
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setLoginModalTab("login");
+                    setIsLoginModalOpen(true);
+                  }}
+                  style={{ padding: "8px 16px", fontSize: "13px", fontWeight: "700", display: "flex", gap: "6px", alignItems: "center" }}
+                  id="btn-open-login"
+                >
+                  🔑 Log In / Register
+                </button>
+              )}
             </div>
           </div>
         </header>
@@ -1914,25 +1971,31 @@ export default function Home() {
                 </div>
 
                 {/* Add Comment Input Form */}
-                <form onSubmit={handleAddComment} style={{ display: "flex", gap: "8px" }}>
-                  <input
-                    type="text"
-                    placeholder={`Reply as ${viewMode === "admin" ? "Admin" : "Developer"}...`}
-                    className="form-input"
-                    value={newCommentText}
-                    onChange={(e) => setNewCommentText(e.target.value)}
-                    style={{ flex: 1 }}
-                    id="comments-thread-input"
-                  />
-                  <button
-                    type="submit"
-                    className="btn btn-primary"
-                    disabled={submittingComment || !newCommentText.trim()}
-                    style={{ padding: "8px 12px" }}
-                  >
-                    Send
-                  </button>
-                </form>
+                {isAuthenticated && viewMode !== "public" ? (
+                  <form onSubmit={handleAddComment} style={{ display: "flex", gap: "8px" }}>
+                    <input
+                      type="text"
+                      placeholder={`Reply as ${viewMode === "admin" ? "Admin" : "Developer"}...`}
+                      className="form-input"
+                      value={newCommentText}
+                      onChange={(e) => setNewCommentText(e.target.value)}
+                      style={{ flex: 1 }}
+                      id="comments-thread-input"
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={submittingComment || !newCommentText.trim()}
+                      style={{ padding: "8px 12px" }}
+                    >
+                      Send
+                    </button>
+                  </form>
+                ) : (
+                  <p style={{ fontSize: "11px", color: "var(--text-muted)", fontStyle: "italic", textAlign: "center", marginTop: "10px" }}>
+                    Please log in or register as a developer to post comments thread replies.
+                  </p>
+                )}
               </div>
 
             </div>
@@ -2060,6 +2123,171 @@ export default function Home() {
             )}
           </div>
         </main>
+      )}
+
+      {/* --- Login & Registration Tabbed Modal Overlay --- */}
+      {isLoginModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: "450px" }}>
+            <div className="modal-header" style={{ paddingBottom: 0 }}>
+              <div style={{ display: "flex", gap: "16px", borderBottom: "1px solid var(--border-color)", width: "100%" }}>
+                <button
+                  type="button"
+                  style={{
+                    padding: "12px 16px",
+                    background: "none",
+                    border: "none",
+                    borderBottom: loginModalTab === "login" ? "2px solid var(--primary)" : "2px solid transparent",
+                    color: loginModalTab === "login" ? "var(--primary)" : "var(--text-muted)",
+                    fontWeight: "700",
+                    fontSize: "14px",
+                    cursor: "pointer",
+                    outline: "none"
+                  }}
+                  onClick={() => {
+                    setLoginModalTab("login");
+                    setLoginError(null);
+                    setRegisterError(null);
+                  }}
+                >
+                  Login
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    padding: "12px 16px",
+                    background: "none",
+                    border: "none",
+                    borderBottom: loginModalTab === "register" ? "2px solid var(--primary)" : "2px solid transparent",
+                    color: loginModalTab === "register" ? "var(--primary)" : "var(--text-muted)",
+                    fontWeight: "700",
+                    fontSize: "14px",
+                    cursor: "pointer",
+                    outline: "none"
+                  }}
+                  onClick={() => {
+                    setLoginModalTab("register");
+                    setLoginError(null);
+                    setRegisterError(null);
+                  }}
+                  id="tab-register"
+                >
+                  Register
+                </button>
+              </div>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: "4px 8px", position: "absolute", right: "20px", top: "20px" }}
+                onClick={() => {
+                  setIsLoginModalOpen(false);
+                  setLoginUsername("");
+                  setLoginPassword("");
+                  setRegisterUsername("");
+                  setRegisterPassword("");
+                  setRegisterConfirmPassword("");
+                  setLoginError(null);
+                  setRegisterError(null);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {loginModalTab === "login" ? (
+              <form onSubmit={handleLogin}>
+                <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "16px", paddingTop: "20px" }}>
+                  {loginError && (
+                    <div className="panel" style={{ padding: "10px", borderColor: "var(--danger)", backgroundColor: "rgba(239, 68, 68, 0.05)", margin: 0 }}>
+                      <p style={{ color: "var(--danger)", fontSize: "12px", fontWeight: "600", textAlign: "center", margin: 0 }}>
+                        ⚠️ {loginError}
+                      </p>
+                    </div>
+                  )}
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Username</label>
+                    <input
+                      type="text"
+                      placeholder="Enter username..."
+                      className="form-input"
+                      value={loginUsername}
+                      onChange={(e) => setLoginUsername(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Password</label>
+                    <input
+                      type="password"
+                      placeholder="Enter password..."
+                      className="form-input"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer" style={{ borderTop: "none" }}>
+                  <button type="submit" className="btn btn-primary" style={{ width: "100%", padding: "10px" }} disabled={authenticating}>
+                    {authenticating ? "Logging in..." : "Login"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister}>
+                <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "16px", paddingTop: "20px" }}>
+                  {registerError && (
+                    <div className="panel" style={{ padding: "10px", borderColor: "var(--danger)", backgroundColor: "rgba(239, 68, 68, 0.05)", margin: 0 }}>
+                      <p style={{ color: "var(--danger)", fontSize: "12px", fontWeight: "600", textAlign: "center", margin: 0 }}>
+                        ⚠️ {registerError}
+                      </p>
+                    </div>
+                  )}
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">User ID (Username)</label>
+                    <input
+                      type="text"
+                      placeholder="Choose alphanumeric username..."
+                      className="form-input"
+                      value={registerUsername}
+                      onChange={(e) => setRegisterUsername(e.target.value)}
+                      required
+                      id="register-username"
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Password</label>
+                    <input
+                      type="password"
+                      placeholder="Enter password (min 6 chars)..."
+                      className="form-input"
+                      value={registerPassword}
+                      onChange={(e) => setRegisterPassword(e.target.value)}
+                      required
+                      id="register-password"
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Confirm Password</label>
+                    <input
+                      type="password"
+                      placeholder="Confirm password..."
+                      className="form-input"
+                      value={registerConfirmPassword}
+                      onChange={(e) => setRegisterConfirmPassword(e.target.value)}
+                      required
+                      id="register-confirm-password"
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer" style={{ borderTop: "none" }}>
+                  <button type="submit" className="btn btn-primary" style={{ width: "100%", padding: "10px" }} disabled={registering} id="btn-submit-register">
+                    {registering ? "Registering..." : "Create Account & Login"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
       )}
 
       {/* --- Create Tag Modal Overlay --- */}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import AdmZip from "adm-zip";
+import { cleanAndNormalizeZip } from "@/lib/ingestion";
 
 export async function POST(req: NextRequest) {
   try {
@@ -25,6 +26,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No ZIP file or Git Repository provided." }, { status: 400 });
     }
 
+    // Normalize and clean ZIP structure
+    zipBuffer = cleanAndNormalizeZip(zipBuffer);
+
     let zip: AdmZip;
     try {
       zip = new AdmZip(zipBuffer);
@@ -41,16 +45,16 @@ export async function POST(req: NextRequest) {
     );
 
     // Derive capability type based on structure
-    const hasAgentFile = filePaths.some(
-      (p) => p.endsWith(".github/agents/profile.agent.md") || p.includes("agents/subagent-profile.md")
+    const hasPluginFile = filePaths.some(
+      (p) => p.endsWith("plugin.json") || p.includes("dist/") || p.endsWith(".mcp.json")
     );
 
-    const hasPluginFile = filePaths.some(
-      (p) => p.includes("dist/") || p.endsWith(".mcp.json") || p.endsWith("plugin.json")
+    const hasAgentFile = filePaths.some(
+      (p) => p.includes("agents/") || (p.includes(".github/agents/") && p.endsWith(".agent.md")) || p.includes("agents/subagent-profile.md")
     );
 
     const hasSkillFile = filePaths.some(
-      (p) => p.includes("skills/") && p.endsWith("SKILL.md")
+      (p) => p.includes("skills/")
     );
 
     let derivedType: "AGENT" | "PLUGIN" | "SKILL" = "SKILL";

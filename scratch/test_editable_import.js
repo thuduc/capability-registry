@@ -49,9 +49,10 @@ const manifestEntry = zipEntries.find(
 );
 
 if (manifestEntry) {
-  zip.deleteFile(manifestEntry.entryName);
+  manifestEntry.setData(Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
+} else {
+  zip.addFile(".capability.json", Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
 }
-zip.addFile(".capability.json", Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
 const updatedZipBuffer = zip.toBuffer();
 
 // Parse again to verify the updated manifest inside the ZIP

@@ -8,11 +8,6 @@ export async function GET(
   { params }: { params: Promise<{ versionId: string }> }
 ) {
   try {
-    const userHeader = req.headers.get("x-simulated-user") || "";
-    if (!userHeader) {
-      return NextResponse.json({ error: "Access Denied: Login required." }, { status: 401 });
-    }
-
     const { versionId } = await params;
 
     const versionRecord = await prisma.capabilityVersion.findUnique({
@@ -22,6 +17,14 @@ export async function GET(
 
     if (!versionRecord) {
       return NextResponse.json({ error: "Version not found." }, { status: 404 });
+    }
+
+    // Enforce authentication unless downloading an ACTIVE (public) version
+    if (versionRecord.status !== "ACTIVE") {
+      const userHeader = req.headers.get("x-simulated-user") || "";
+      if (!userHeader) {
+        return NextResponse.json({ error: "Access Denied: Login required." }, { status: 401 });
+      }
     }
 
     const absoluteZipPath = path.resolve(process.cwd(), versionRecord.zipPath);

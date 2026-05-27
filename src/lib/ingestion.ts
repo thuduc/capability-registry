@@ -17,11 +17,136 @@ export function isValidSemver(version: string): boolean {
   return semverRegex.test(version);
 }
 
+// Helper to fix Data Descriptors in ZIP file buffers for adm-zip compatibility.
+// Data descriptors (bit 3 of general purpose bit flag is set) can cause "No descriptor present" error in adm-zip.
+export function fixZipDataDescriptors(zip: any, zipBuffer: Buffer) {
+  for (const entry of zip.getEntries()) {
+    const header = entry.header;
+    if (header) {
+      header.flags &= ~8;
+      header.flags_desc = false;
+      
+      const offset = header.offset;
+      if (offset !== undefined && offset !== null) {
+        const flagsOffset = offset + 6;
+        if (flagsOffset + 2 <= zipBuffer.length) {
+          let locFlags = zipBuffer.readUInt16LE(flagsOffset);
+          locFlags &= ~8;
+          zipBuffer.writeUInt16LE(locFlags, flagsOffset);
+        }
+
+        const crcOffset = offset + 14;
+        if (crcOffset + 4 <= zipBuffer.length) {
+          const locCrc = zipBuffer.readUInt32LE(crcOffset);
+          if (locCrc === 0 && header.crc !== 0) {
+            zipBuffer.writeUInt32LE(header.crc, crcOffset);
+          }
+        }
+
+        const compSizeOffset = offset + 18;
+        if (compSizeOffset + 4 <= zipBuffer.length) {
+          const locCompSize = zipBuffer.readUInt32LE(compSizeOffset);
+          if (locCompSize === 0 && header.compressedSize !== 0) {
+            zipBuffer.writeUInt32LE(header.compressedSize, compSizeOffset);
+          }
+        }
+
+        const sizeOffset = offset + 22;
+        if (sizeOffset + 4 <= zipBuffer.length) {
+          const locSize = zipBuffer.readUInt32LE(sizeOffset);
+          if (locSize === 0 && header.size !== 0) {
+            zipBuffer.writeUInt32LE(header.size, sizeOffset);
+          }
+        }
+      }
+
+      if (header.localHeader) {
+        header.localHeader.flags &= ~8;
+        header.localHeader.flags_desc = false;
+        if (header.localHeader.crc === 0 && header.crc !== 0) {
+          header.localHeader.crc = header.crc;
+        }
+        if (header.localHeader.compressedSize === 0 && header.compressedSize !== 0) {
+          header.localHeader.compressedSize = header.compressedSize;
+        }
+        if (header.localHeader.size === 0 && header.size !== 0) {
+          header.localHeader.size = header.size;
+        }
+      }
+    }
+  }
+}
+
+// Helper to fix Data Descriptors in Central Directory and Local Header in memory
+export function cleanAndNormalizeZip(zipBuffer: Buffer): Buffer {
+  let zip: AdmZip;
+  try {
+    zip = new AdmZip(zipBuffer);
+  } catch (e) {
+    return zipBuffer;
+  }
+
+  // First fix descriptors in memory to ensure getData() works correctly
+  fixZipDataDescriptors(zip, zipBuffer);
+
+  const entries = zip.getEntries();
+  
+  // Filter out macOS metadata and DS_Store
+  const activeEntries = entries.filter(e => {
+    const name = e.entryName.replace(/\\/g, "/");
+    return !name.startsWith("__MACOSX/") && 
+           !name.endsWith(".DS_Store") && 
+           name !== "__MACOSX" && 
+           name !== ".DS_Store" &&
+           name !== "";
+  });
+
+  if (activeEntries.length === 0) {
+    return zipBuffer;
+  }
+
+  // Detect single top-level directory prefix (common to all entries)
+  const firstEntryName = activeEntries[0].entryName.replace(/\\/g, "/");
+  const firstSlash = firstEntryName.indexOf("/");
+  let commonPrefix = "";
+  if (firstSlash !== -1) {
+    const potentialPrefix = firstEntryName.substring(0, firstSlash + 1);
+    const allSharePrefix = activeEntries.every(e => {
+      const name = e.entryName.replace(/\\/g, "/");
+      return name.startsWith(potentialPrefix);
+    });
+    if (allSharePrefix) {
+      commonPrefix = potentialPrefix;
+    }
+  }
+
+  const newZip = new AdmZip();
+  for (const entry of activeEntries) {
+    const name = entry.entryName.replace(/\\/g, "/");
+    if (commonPrefix && name === commonPrefix) {
+      continue;
+    }
+    const targetName = commonPrefix ? name.substring(commonPrefix.length) : name;
+    if (!targetName) continue;
+
+    if (entry.isDirectory) {
+      newZip.addFile(targetName + (targetName.endsWith("/") ? "" : "/"), Buffer.alloc(0));
+    } else {
+      newZip.addFile(targetName, entry.getData());
+    }
+  }
+
+  return newZip.toBuffer();
+}
+
 // Ingestion and verification function
 export function processCapabilityZip(
   zipBuffer: Buffer,
   tempUploadId: string
 ): ParsingResult & { files: { path: string; content?: string }[] } {
+  // Normalize and clean ZIP structure
+  zipBuffer = cleanAndNormalizeZip(zipBuffer);
+
   let zip: AdmZip;
   try {
     zip = new AdmZip(zipBuffer);
@@ -66,40 +191,23 @@ export function processCapabilityZip(
     throw new Error("Missing or invalid field 'harnesses' (must be an array of strings) in .capability.json.");
   }
 
-  // 3. Schema Rigidity checks: verify directory structure matching harnesses
-  // Let's normalize entry paths to avoid prefix issues (e.g. if zipped with a parent directory)
+  // 3. Normalize paths to verify structure
   const filePaths = zipEntries.map((e) => e.entryName.replace(/\\/g, "/"));
 
-  // Check harnesses and match required files
-  for (const harness of harnesses) {
-    const normalizedHarness = harness.toLowerCase();
-    if (normalizedHarness === "claude" || normalizedHarness === "opencode" || normalizedHarness === "codex") {
-      const hasPluginJson = filePaths.some((p) => p.endsWith(".claude-plugin/plugin.json"));
-      if (!hasPluginJson) {
-        throw new Error(`Schema Rigidity Violation: Harness '${harness}' declared, but missing '.claude-plugin/plugin.json' in bundle.`);
-      }
-    } else if (normalizedHarness === "github-copilot" || normalizedHarness === "github-copilot-agent" || normalizedHarness === "ghcp") {
-      const hasCopilotAgent = filePaths.some((p) => p.endsWith(".github/agents/profile.agent.md"));
-      if (!hasCopilotAgent) {
-        throw new Error(`Schema Rigidity Violation: Harness '${harness}' declared, but missing '.github/agents/profile.agent.md' in bundle.`);
-      }
-    }
-  }
-
   // 4. Type Derivation Logic
-  // - Agent: Derived if the package contains dedicated system prompts or persona layouts (e.g., `.github/agents/profile.agent.md` or `agents/subagent-profile.md`).
-  // - Plugin: Derived if the package contains active script runtime (`dist/`) or infrastructure schema protocol connector (`.mcp.json`).
-  // - Skill: Derived if package contains ONLY procedural manuals (`skills/[name]/SKILL.md` or `skills/SKILL.md`) and is not Agent or Plugin.
-  const hasAgentFile = filePaths.some(
-    (p) => p.endsWith(".github/agents/profile.agent.md") || p.includes("agents/subagent-profile.md")
+  // - Agent: Derived if the package contains dedicated system prompts or persona layouts (e.g., `.github/agents/profile.agent.md` or files ending in .agent.md under .github/agents/, or files under agents/).
+  // - Plugin: Derived if the package contains active script runtime (`dist/`) or infrastructure schema protocol connector (`.mcp.json`) or a plugin.json file.
+  // - Skill: Derived if package contains ONLY procedural manuals (`skills/[name]/SKILL.md` or `skills/SKILL.md` or files under skills/) and is not Agent or Plugin.
+  const hasPluginFile = filePaths.some(
+    (p) => p.endsWith("plugin.json") || p.includes("dist/") || p.endsWith(".mcp.json")
   );
 
-  const hasPluginFile = filePaths.some(
-    (p) => p.includes("dist/") || p.endsWith(".mcp.json") || p.endsWith("plugin.json")
+  const hasAgentFile = filePaths.some(
+    (p) => p.includes("agents/") || (p.includes(".github/agents/") && p.endsWith(".agent.md")) || p.includes("agents/subagent-profile.md")
   );
 
   const hasSkillFile = filePaths.some(
-    (p) => p.includes("skills/") && p.endsWith("SKILL.md")
+    (p) => p.includes("skills/")
   );
 
   let derivedType: "AGENT" | "PLUGIN" | "SKILL" = "SKILL";
@@ -112,6 +220,27 @@ export function processCapabilityZip(
   } else {
     // If none are specifically present, check if skills directory exists at least, otherwise default to skill or throw
     derivedType = "SKILL";
+  }
+
+  // 5. Schema Rigidity checks: verify directory structure matching harnesses
+  // Check harnesses and match required files
+  for (const harness of harnesses) {
+    const normalizedHarness = harness.toLowerCase();
+    if (normalizedHarness === "claude" || normalizedHarness === "opencode" || normalizedHarness === "codex") {
+      const hasPluginJson = filePaths.some((p) => p.endsWith("plugin.json"));
+      const hasAgentFileCheck = filePaths.some((p) => p.includes("agents/"));
+      const hasSkillFileCheck = filePaths.some((p) => p.includes("skills/"));
+      if (!hasPluginJson && !hasAgentFileCheck && !hasSkillFileCheck) {
+        throw new Error(`Schema Rigidity Violation: Harness '${harness}' declared, but bundle does not contain a plugin (plugin.json), agent (under agents/), or skill (under skills/).`);
+      }
+    } else if (normalizedHarness === "github-copilot" || normalizedHarness === "github-copilot-agent" || normalizedHarness === "ghcp") {
+      if (derivedType === "AGENT") {
+        const hasCopilotAgent = filePaths.some((p) => p.includes(".github/agents/") && p.endsWith(".agent.md"));
+        if (!hasCopilotAgent) {
+          throw new Error(`Schema Rigidity Violation: Harness '${harness}' declared for Agent capability, but missing a '.agent.md' file under '.github/agents/' folder.`);
+        }
+      }
+    }
   }
 
   // Read code or prompt files for differential reviews
@@ -156,6 +285,9 @@ export function saveExtractedCapability(
   capabilityName: string,
   versionStr: string
 ): { zipPath: string; extractedPath: string } {
+  // Normalize and clean ZIP structure
+  zipBuffer = cleanAndNormalizeZip(zipBuffer);
+
   const baseStorageDir = path.join(process.cwd(), ".registry_storage");
   const uploadsDir = path.join(baseStorageDir, "uploads");
   const extractedDir = path.join(baseStorageDir, "extracted", capabilityName, versionStr);
