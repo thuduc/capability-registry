@@ -1,6 +1,0 @@
-{
-  "id": "weather-agent",
-  "name": "Weather Agent Plugin",
-  "version": "1.0.0",
-  "description": "Harness integration for Claude Code."
-}

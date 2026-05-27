@@ -652,6 +652,62 @@ export default function Home() {
     }
   };
 
+  const handleDeleteCapability = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to permanently delete the capability '${name}'?\nThis will permanently delete all its versions, comments, and physical storage files.`)) return;
+
+    try {
+      const res = await fetch(`/api/capabilities/${id}`, {
+        method: "DELETE",
+        headers: { 
+          "x-simulated-user": currentUser,
+          "x-simulated-roles": sessionRoles.join(","),
+        },
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete capability.");
+      }
+
+      alert(`Capability '${name}' deleted successfully!`);
+      setSelectedCapability(null);
+      setSelectedVersion(null);
+      // Refresh capabilities list
+      await fetchCapabilities();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Failed to delete capability.");
+    }
+  };
+
+  const handleDeleteVersion = async (versionId: string, versionStr: string, capabilityName: string) => {
+    if (!confirm(`Are you sure you want to permanently delete version v${versionStr} of '${capabilityName}'?\nThis will permanently delete this version's files and comments.`)) return;
+
+    try {
+      const res = await fetch(`/api/capabilities/versions/${versionId}`, {
+        method: "DELETE",
+        headers: { 
+          "x-simulated-user": currentUser,
+          "x-simulated-roles": sessionRoles.join(","),
+        },
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete capability version.");
+      }
+
+      alert(data.message || `Version v${versionStr} deleted successfully!`);
+      setSelectedCapability(null);
+      setSelectedVersion(null);
+      // Refresh capabilities list
+      await fetchCapabilities();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Failed to delete capability version.");
+    }
+  };
+
   // Helper to get type badge
   const renderTypeBadge = (type: string) => {
     const lower = type.toLowerCase();
@@ -1729,11 +1785,21 @@ export default function Home() {
                       ▶ Re-activate Inactive Capability
                     </button>
                   )}
+
+                  {(selectedVersion.status === "DRAFT" || selectedVersion.status === "INACTIVE" || selectedVersion.status === "REJECTED") && (
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => handleDeleteVersion(selectedVersion.id, selectedVersion.version, selectedCapability.name)}
+                      style={{ marginTop: "6px" }}
+                    >
+                      🗑️ Delete Version v{selectedVersion.version}
+                    </button>
+                  )}
                 </div>
               )}
 
               {/* --- SCENARIO 3: Admin Review Queue & Governance Auditing --- */}
-              {viewMode === "admin" && (selectedVersion.status === "PENDING_REVIEW" || selectedVersion.status === "ACTIVE" || selectedVersion.status === "INACTIVE") && (
+              {viewMode === "admin" && (selectedVersion.status === "PENDING_REVIEW" || selectedVersion.status === "ACTIVE" || selectedVersion.status === "INACTIVE" || selectedVersion.status === "REJECTED" || selectedVersion.status === "DRAFT") && (
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                   <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "14px" }}>
                     <h4 style={{ fontSize: "12px", fontWeight: "700", textTransform: "uppercase", marginBottom: "8px", color: "var(--text-secondary)" }}>
@@ -1808,6 +1874,16 @@ export default function Home() {
                         onClick={() => handleStatusTransition("ACTIVATE", selectedVersion.id)}
                       >
                         ▶ Re-activate Inactive Capability
+                      </button>
+                    )}
+
+                    {(selectedVersion.status === "DRAFT" || selectedVersion.status === "INACTIVE" || selectedVersion.status === "REJECTED") && (
+                      <button
+                        className="btn btn-danger"
+                        style={{ width: "100%", marginTop: "8px" }}
+                        onClick={() => handleDeleteVersion(selectedVersion.id, selectedVersion.version, selectedCapability.name)}
+                      >
+                        🗑️ Delete Version v{selectedVersion.version}
                       </button>
                     )}
                   </div>

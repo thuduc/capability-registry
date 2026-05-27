@@ -1,9 +1,0 @@
-{
-  "name": "weather-agent",
-  "description": "Climate analytics and weather agents",
-  "version": "1.0.2",
-  "owner": "Weather Team",
-  "harnesses": [
-    "claude"
-  ]
-}

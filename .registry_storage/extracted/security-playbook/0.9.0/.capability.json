@@ -1,7 +1,0 @@
-{
-  "name": "security-playbook",
-  "description": "Procedural instruction playbooks for corporate OAuth2 compliance and secret rotations.",
-  "version": "0.9.0",
-  "owner": "Cybersecurity Team",
-  "harnesses": []
-}
