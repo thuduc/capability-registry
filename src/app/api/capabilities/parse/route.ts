@@ -2,6 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 import AdmZip from "adm-zip";
 import { cleanAndNormalizeZip } from "@/lib/ingestion";
 
+function isTextBuffer(buffer: Buffer): boolean {
+  if (buffer.length === 0) return true;
+  const sampleSize = Math.min(buffer.length, 8000);
+  let nullCount = 0;
+  let nonAsciiCount = 0;
+  
+  for (let i = 0; i < sampleSize; i++) {
+    const byte = buffer[i];
+    if (byte === 0) {
+      nullCount++;
+    } else if (byte < 7 || (byte > 14 && byte < 32 && byte !== 27)) {
+      nonAsciiCount++;
+    }
+  }
+  
+  if (nullCount > 0) return false;
+  if (nonAsciiCount / sampleSize > 0.3) return false;
+  
+  return true;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const userHeader = req.headers.get("x-simulated-user") || "";
@@ -37,39 +58,57 @@ export async function POST(req: NextRequest) {
     }
 
     const zipEntries = zip.getEntries();
-    const filePaths = zipEntries.map((e) => e.entryName.replace(/\\/g, "/"));
+    const files: { path: string; content?: string; isText?: boolean; isImage?: boolean }[] = [];
+    zipEntries.forEach((entry) => {
+      if (entry.isDirectory) return;
+      const entryName = entry.entryName.replace(/\\/g, "/");
+      const ext = entryName.split(".").pop()?.toLowerCase() || "";
+
+      const imageExtensions = ["png", "gif", "svg", "jpg", "jpeg", "webp", "ico", "bmp"];
+      const isImage = imageExtensions.includes(ext);
+
+      if (isImage) {
+        try {
+          const mimeType = ext === "svg" ? "image/svg+xml" : ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+          const base64Data = entry.getData().toString("base64");
+          files.push({
+            path: entryName,
+            content: `data:${mimeType};base64,${base64Data}`,
+            isImage: true,
+          });
+        } catch (e) {
+          files.push({ path: entryName });
+        }
+      } else {
+        try {
+          const buffer = entry.getData();
+          if (isTextBuffer(buffer)) {
+            files.push({
+              path: entryName,
+              content: buffer.toString("utf8"),
+              isText: true,
+            });
+          } else {
+            files.push({ path: entryName });
+          }
+        } catch (e) {
+          files.push({ path: entryName });
+        }
+      }
+    });
 
     // 1. Check if .capability.json exists
     const manifestEntry = zipEntries.find(
       (entry) => entry.entryName === ".capability.json" || entry.entryName.endsWith("/.capability.json")
     );
 
-    // Derive capability type based on structure
-    const hasPluginFile = filePaths.some(
-      (p) => p.endsWith("plugin.json") || p.includes("dist/") || p.endsWith(".mcp.json")
-    );
-
-    const hasAgentFile = filePaths.some(
-      (p) => p.includes("agents/") || (p.includes(".github/agents/") && p.endsWith(".agent.md")) || p.includes("agents/subagent-profile.md")
-    );
-
-    const hasSkillFile = filePaths.some(
-      (p) => p.includes("skills/")
-    );
-
     let derivedType: "AGENT" | "PLUGIN" | "SKILL" = "SKILL";
-    if (hasPluginFile) {
-      derivedType = "PLUGIN";
-    } else if (hasAgentFile) {
-      derivedType = "AGENT";
-    } else if (hasSkillFile) {
-      derivedType = "SKILL";
-    }
 
     if (!manifestEntry) {
       // Return hasManifest: false
       return NextResponse.json({
         hasManifest: false,
+        files,
         metadata: {
           name: "",
           description: "",
@@ -90,11 +129,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Failed to parse '.capability.json'. File is not valid JSON." }, { status: 400 });
     }
 
-    const { name, description, version, owner, harnesses } = manifestData;
+    const { name, description, version, owner, harnesses, type } = manifestData;
+    if (type) {
+      const upperType = type.toUpperCase();
+      if (upperType === "AGENT" || upperType === "PLUGIN" || upperType === "SKILL") {
+        derivedType = upperType;
+      }
+    }
 
     // Return hasManifest: true, and the parsed metadata
     return NextResponse.json({
       hasManifest: true,
+      files,
       metadata: {
         name: name || "",
         description: description || "",

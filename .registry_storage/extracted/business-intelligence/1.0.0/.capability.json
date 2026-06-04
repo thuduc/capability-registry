@@ -1,0 +1,11 @@
+{
+  "name": "business-intelligence",
+  "description": "Enterprise business intelligence querying plugin. Synthesizes complex analytical reporting queries and aggregates existing database data to provide visual reports and insights.",
+  "version": "1.0.0",
+  "owner": "Data Analytics Group",
+  "harnesses": [
+    "claude",
+    "opencode",
+    "codex"
+  ]
+}

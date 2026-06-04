@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import hljs from "highlight.js";
 
 interface Comment {
   id: string;
@@ -51,6 +52,28 @@ interface DiffResponse {
   isFirstVersion: boolean;
   previousVersion: string | null;
   diffs: FileDiff[];
+}
+
+function highlightCode(code: string, filepath: string): React.ReactNode {
+  if (!code) return "";
+  const ext = filepath.split(".").pop()?.toLowerCase() || "";
+  
+  try {
+    let html = "";
+    if (ext && hljs.getLanguage(ext)) {
+      html = hljs.highlight(code, { language: ext }).value;
+    } else {
+      // Fallback to auto-detecting language, or plain text if undefined
+      html = hljs.highlightAuto(code).value;
+    }
+    return <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />;
+  } catch (err) {
+    const escaped = code
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return <code className="hljs" dangerouslySetInnerHTML={{ __html: escaped }} />;
+  }
 }
 
 export default function Home() {
@@ -149,6 +172,7 @@ export default function Home() {
   // Ingestion / Import Step-by-Step Wizard States
   const [importStep, setImportStep] = useState<"upload" | "confirm">("upload");
   const [parsedMetadata, setParsedMetadata] = useState<any | null>(null);
+  const [selectedPreImportFile, setSelectedPreImportFile] = useState<any | null>(null);
 
   // Ingestion Manual Forms
   const [enteredName, setEnteredName] = useState("");
@@ -172,6 +196,7 @@ export default function Home() {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedFileContent, setSelectedFileContent] = useState<string | null>(null);
+  const [selectedFileMetadata, setSelectedFileMetadata] = useState<{ isImage?: boolean; isText?: boolean; isBinary?: boolean } | null>(null);
   const [loadingFileTree, setLoadingFileTree] = useState(false);
   const [loadingFileContent, setLoadingFileContent] = useState(false);
 
@@ -293,6 +318,7 @@ export default function Home() {
           setLoadingFileTree(true);
           setSelectedFilePath(null);
           setSelectedFileContent(null);
+          setSelectedFileMetadata(null);
           const res = await fetch(`/api/capabilities/versions/${selectedVersion.id}/files`, {
             headers: {
               "x-simulated-user": currentUser,
@@ -320,6 +346,7 @@ export default function Home() {
       setFileTree([]);
       setSelectedFilePath(null);
       setSelectedFileContent(null);
+      setSelectedFileMetadata(null);
     }
   }, [selectedVersion]);
 
@@ -329,6 +356,7 @@ export default function Home() {
       setLoadingFileContent(true);
       setSelectedFilePath(filePath);
       setSelectedFileContent(null);
+      setSelectedFileMetadata(null);
       const res = await fetch(
         `/api/capabilities/versions/${selectedVersion.id}/files?file=${encodeURIComponent(filePath)}`, {
           headers: {
@@ -340,9 +368,15 @@ export default function Home() {
       if (!res.ok) throw new Error("Failed to read file.");
       const data = await res.json();
       setSelectedFileContent(data.content);
+      setSelectedFileMetadata({
+        isImage: data.isImage,
+        isText: data.isText,
+        isBinary: data.isBinary
+      });
     } catch (e: any) {
       console.error(e);
       setSelectedFileContent(`Error loading file content: ${e.message}`);
+      setSelectedFileMetadata(null);
     } finally {
       setLoadingFileContent(false);
     }
@@ -485,6 +519,11 @@ export default function Home() {
 
       // Transition to Step 2 (Confirm / Input screen)
       setParsedMetadata(data);
+      if (data.files && data.files.length > 0) {
+        setSelectedPreImportFile(data.files[0]);
+      } else {
+        setSelectedPreImportFile(null);
+      }
       setImportStep("confirm");
 
       // Initialize entered fields using parsed metadata
@@ -560,6 +599,7 @@ export default function Home() {
       setIsImportModalOpen(false);
       setImportStep("upload");
       setParsedMetadata(null);
+      setSelectedPreImportFile(null);
       setSelectedFile(null);
       setGitUrl("");
       setGitTag("");
@@ -2003,6 +2043,7 @@ export default function Home() {
                         onClick={() => {
                           setSelectedFilePath(null);
                           setSelectedFileContent(null);
+                          setSelectedFileMetadata(null);
                         }}
                       >
                         ✕ Close File
@@ -2011,9 +2052,23 @@ export default function Home() {
                     {loadingFileContent ? (
                       <p style={{ fontSize: "12px", color: "var(--text-muted)", padding: "10px" }}>Reading content...</p>
                     ) : (
-                      <pre className="file-viewer-content">
-                        <code>{selectedFileContent}</code>
-                      </pre>
+                      selectedFileMetadata?.isImage ? (
+                        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "180px", backgroundColor: "rgba(0,0,0,0.15)", borderRadius: "4px", padding: "16px" }}>
+                          <img
+                            src={selectedFileContent || ""}
+                            alt={selectedFilePath.split("/").pop()}
+                            style={{ maxWidth: "100%", maxHeight: "250px", objectFit: "contain", borderRadius: "4px", boxShadow: "0 4px 12px rgba(0,0,0,0.25)" }}
+                          />
+                        </div>
+                      ) : selectedFileMetadata?.isBinary ? (
+                        <div style={{ padding: "12px", fontStyle: "italic", color: "var(--text-muted)", fontSize: "12px" }}>
+                          (Unsupported binary content format cannot be previewed)
+                        </div>
+                      ) : (
+                        <pre className="file-viewer-content" style={{ padding: "12px", margin: "0" }}>
+                          {highlightCode(selectedFileContent || "", selectedFilePath)}
+                        </pre>
+                      )
                     )}
                   </div>
                 )}
@@ -2670,7 +2725,7 @@ export default function Home() {
       {/* 4. Import / Ingestion Modal Overlay */}
       {isImportModalOpen && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: "550px" }}>
+          <div className="modal-content" style={{ maxWidth: importStep === "confirm" ? "980px" : "550px", width: "95%", transition: "max-width 0.3s ease" }}>
             
             <div className="modal-header">
               <h3 style={{ fontSize: "16px", fontWeight: "700" }}>Import GenAI Capability Bundle</h3>
@@ -2681,6 +2736,7 @@ export default function Home() {
                   setIsImportModalOpen(false);
                   setImportStep("upload");
                   setParsedMetadata(null);
+                  setSelectedPreImportFile(null);
                   setSelectedFile(null);
                   setGitUrl("");
                   setGitTag("");
@@ -2866,130 +2922,241 @@ export default function Home() {
               </form>
             ) : (
               <form onSubmit={handleImportConfirm}>
-                <div className="modal-body">
-                  <div style={{ fontSize: "11px", fontWeight: "700", textTransform: "uppercase", color: "var(--primary)", display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span>Step 2 of 2:</span>
-                    <span style={{ color: "var(--text-muted)" }}>Verify Metadata & Governance</span>
-                  </div>
-
-                  {importError && (
-                    <div className="panel" style={{ borderColor: "var(--danger)", padding: "10px 14px", margin: "12px 0" }}>
-                      <p style={{ color: "var(--danger)", fontSize: "12px", margin: 0 }}>{importError}</p>
+                <div className="modal-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", minHeight: "450px" }}>
+                  {/* Left Column: Form Fields and Comments */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: "700", textTransform: "uppercase", color: "var(--primary)", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span>Step 2 of 2:</span>
+                      <span style={{ color: "var(--text-muted)" }}>Verify Metadata & Governance</span>
                     </div>
-                  )}
 
-                  <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "12px" }}>
-                    {parsedMetadata?.hasManifest ? (
-                      <div className="panel" style={{ borderColor: "var(--success)", backgroundColor: "rgba(16, 185, 129, 0.03)", padding: "10px 14px", margin: 0 }}>
-                        <p style={{ color: "var(--success)", fontSize: "12px", fontWeight: "600", margin: 0 }}>
-                          ✓ MASTER CONFIGURATION DETECTED: Found '.capability.json' in bundle root. You can review and edit the entries below.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="panel" style={{ borderColor: "var(--warning)", backgroundColor: "rgba(245, 158, 11, 0.03)", padding: "10px 14px", margin: 0 }}>
-                        <p style={{ color: "var(--warning)", fontSize: "12px", fontWeight: "600", margin: 0 }}>
-                          ⚠️ MISSING MASTER CONFIGURATION: No '.capability.json' manifest was found in the bundle root. Please enter the required capability metadata below to register it.
-                        </p>
+                    {importError && (
+                      <div className="panel" style={{ borderColor: "var(--danger)", padding: "10px 14px", margin: "12px 0" }}>
+                        <p style={{ color: "var(--danger)", fontSize: "12px", margin: 0 }}>{importError}</p>
                       </div>
                     )}
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                      <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">Capability Name *</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. model-developer"
-                          className="form-input"
-                          value={enteredName}
-                          onChange={(e) => setEnteredName(e.target.value)}
-                          required
-                        />
-                      </div>
-                      <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">Semantic Version *</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. 1.0.0"
-                          className="form-input"
-                          value={enteredVersion}
-                          onChange={(e) => setEnteredVersion(e.target.value)}
-                          required
-                        />
-                      </div>
-                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "12px" }}>
+                      {parsedMetadata?.hasManifest ? (
+                        <div className="panel" style={{ borderColor: "var(--success)", backgroundColor: "rgba(16, 185, 129, 0.03)", padding: "10px 14px", margin: 0 }}>
+                          <p style={{ color: "var(--success)", fontSize: "12px", fontWeight: "600", margin: 0 }}>
+                            ✓ MASTER CONFIGURATION DETECTED: Found '.capability.json' in bundle root. You can review and edit the entries below.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="panel" style={{ borderColor: "var(--warning)", backgroundColor: "rgba(245, 158, 11, 0.03)", padding: "10px 14px", margin: 0 }}>
+                          <p style={{ color: "var(--warning)", fontSize: "12px", fontWeight: "600", margin: 0 }}>
+                            ⚠️ MISSING MASTER CONFIGURATION: No '.capability.json' manifest was found in the bundle root. Please enter the required capability metadata below to register it.
+                          </p>
+                        </div>
+                      )}
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label">Capability Name *</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. model-developer"
+                            className="form-input"
+                            value={enteredName}
+                            onChange={(e) => setEnteredName(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label">Semantic Version *</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. 1.0.0"
+                            className="form-input"
+                            value={enteredVersion}
+                            onChange={(e) => setEnteredVersion(e.target.value)}
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label">Registered Owner *</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Quantitative Research Team"
+                            className="form-input"
+                            value={enteredOwner}
+                            onChange={(e) => setEnteredOwner(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label">Capability Type *</label>
+                          <select
+                            className="form-select"
+                            value={enteredType}
+                            onChange={(e) => setEnteredType(e.target.value)}
+                            style={{ backgroundColor: "var(--bg-primary)" }}
+                            required
+                            id="import-capability-type-select"
+                          >
+                            <option value="AGENT">Agent</option>
+                            <option value="SKILL">Skill</option>
+                            <option value="PLUGIN">Plugin</option>
+                          </select>
+                        </div>
+                      </div>
+
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">Registered Owner *</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Quantitative Research Team"
-                          className="form-input"
-                          value={enteredOwner}
-                          onChange={(e) => setEnteredOwner(e.target.value)}
+                        <label className="form-label">Description *</label>
+                        <textarea
+                          placeholder="Describe what this capability does..."
+                          className="form-textarea"
+                          value={enteredDescription}
+                          onChange={(e) => setEnteredDescription(e.target.value)}
                           required
+                          style={{ height: "60px" }}
                         />
                       </div>
+
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label className="form-label">Derived Type (Governance)</label>
-                        <div style={{ display: "flex", alignItems: "center", height: "38px" }}>
-                          <span className={`badge badge-${enteredType.toLowerCase()}`} style={{ padding: "4px 10px", fontSize: "11px" }}>
-                            {enteredType}
-                          </span>
+                        <label className="form-label">Client Harnesses Compatibility (Select at least one) *</label>
+                        <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap" }}>
+                          {[
+                            { id: "claude", label: "Claude Code" },
+                            { id: "opencode", label: "OpenCode" },
+                            { id: "codex", label: "Codex/CLI" },
+                            { id: "ghcp", label: "GHCP Agent" }
+                          ].map((h) => (
+                            <label key={h.id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={enteredHarnesses.includes(h.id) || (h.id === "ghcp" && enteredHarnesses.includes("github-copilot"))}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setEnteredHarnesses(prev => [...prev, h.id]);
+                                  } else {
+                                    setEnteredHarnesses(prev => prev.filter(x => x !== h.id && (h.id !== "ghcp" || x !== "github-copilot")));
+                                  }
+                                }}
+                              />
+                              {h.label}
+                            </label>
+                          ))}
                         </div>
                       </div>
                     </div>
 
-                    <div className="form-group" style={{ margin: 0 }}>
-                      <label className="form-label">Description *</label>
+                    <div className="form-group" style={{ marginTop: "14px", marginBottom: 0 }}>
+                      <label className="form-label">Submission & Review Comments</label>
                       <textarea
-                        placeholder="Describe what this capability does..."
+                        placeholder="Provide details about the change history, prompt security additions, or skill execution constraints..."
                         className="form-textarea"
-                        value={enteredDescription}
-                        onChange={(e) => setEnteredDescription(e.target.value)}
-                        required
-                        style={{ height: "60px" }}
+                        value={importComment}
+                        onChange={(e) => setImportComment(e.target.value)}
+                        id="import-comment-textarea"
+                        style={{ height: "50px" }}
                       />
-                    </div>
-
-                    <div className="form-group" style={{ margin: 0 }}>
-                      <label className="form-label">Client Harnesses Compatibility (Select at least one) *</label>
-                      <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap" }}>
-                        {[
-                          { id: "claude", label: "Claude Code" },
-                          { id: "opencode", label: "OpenCode" },
-                          { id: "codex", label: "Codex/CLI" },
-                          { id: "ghcp", label: "GHCP Agent" }
-                        ].map((h) => (
-                          <label key={h.id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
-                            <input
-                              type="checkbox"
-                              checked={enteredHarnesses.includes(h.id) || (h.id === "ghcp" && enteredHarnesses.includes("github-copilot"))}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setEnteredHarnesses(prev => [...prev, h.id]);
-                                } else {
-                                  setEnteredHarnesses(prev => prev.filter(x => x !== h.id && (h.id !== "ghcp" || x !== "github-copilot")));
-                                }
-                              }}
-                            />
-                            {h.label}
-                          </label>
-                        ))}
-                      </div>
                     </div>
                   </div>
 
-                  <div className="form-group" style={{ marginTop: "14px", marginBottom: 0 }}>
-                    <label className="form-label">Submission & Review Comments</label>
-                    <textarea
-                      placeholder="Provide details about the change history, prompt security additions, or skill execution constraints..."
-                      className="form-textarea"
-                      value={importComment}
-                      onChange={(e) => setImportComment(e.target.value)}
-                      id="import-comment-textarea"
-                      style={{ height: "50px" }}
-                    />
+                  {/* Right Column: Pre-Import Bundle Explorer */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "12px", borderLeft: "1px solid var(--border-color)", paddingLeft: "24px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: "700", textTransform: "uppercase", color: "var(--primary)" }}>
+                      🔍 Pre-Import Bundle Explorer
+                    </div>
+                    
+                    {/* Files list / tree */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label className="form-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span>Files List ({parsedMetadata?.files?.length || 0} items)</span>
+                        <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "none" }}>Ready to Import</span>
+                      </label>
+                      <div style={{
+                        backgroundColor: "var(--bg-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "8px 10px",
+                        maxHeight: "150px",
+                        overflowY: "auto",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "4px"
+                      }}>
+                        {parsedMetadata?.files && parsedMetadata.files.length > 0 ? (
+                          parsedMetadata.files.map((fileObj: any) => {
+                            const isSelected = selectedPreImportFile?.path === fileObj.path;
+                            return (
+                              <button
+                                key={fileObj.path}
+                                type="button"
+                                onClick={() => setSelectedPreImportFile(fileObj)}
+                                className={`tree-row ${isSelected ? "active" : ""}`}
+                                style={{
+                                  background: isSelected ? "var(--primary-subtle, rgba(20, 110, 190, 0.1))" : "transparent",
+                                  border: "none",
+                                  width: "100%",
+                                  textAlign: "left",
+                                  padding: "6px 8px",
+                                  borderRadius: "4px",
+                                  cursor: "pointer",
+                                  fontSize: "12px",
+                                  fontFamily: "var(--font-mono, monospace)",
+                                  color: isSelected ? "var(--primary)" : "var(--text-primary)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px"
+                                }}
+                              >
+                                <span>📄</span>
+                                <span style={{ wordBreak: "break-all" }}>{fileObj.path}</span>
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div style={{ fontSize: "12px", color: "var(--text-muted)", padding: "8px" }}>No files in bundle</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* File Content Preview */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", flexGrow: 1 }}>
+                      <label className="form-label">
+                        {selectedPreImportFile ? `File Preview: ${selectedPreImportFile.path.split("/").pop()}` : "File Preview"}
+                      </label>
+                      <div style={{
+                        backgroundColor: "var(--bg-primary)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "6px",
+                        padding: "12px",
+                        flexGrow: 1,
+                        maxHeight: "220px",
+                        overflowY: "auto",
+                        fontFamily: "var(--font-mono, monospace)",
+                        fontSize: "12px",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                        color: "var(--text-primary)"
+                      }}>
+                        {selectedPreImportFile ? (
+                          selectedPreImportFile.isImage ? (
+                            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "180px", backgroundColor: "rgba(0,0,0,0.15)", borderRadius: "4px", padding: "16px" }}>
+                              <img
+                                src={selectedPreImportFile.content}
+                                alt={selectedPreImportFile.path.split("/").pop()}
+                                style={{ maxWidth: "100%", maxHeight: "180px", objectFit: "contain", borderRadius: "4px", boxShadow: "0 4px 12px rgba(0,0,0,0.25)" }}
+                              />
+                            </div>
+                          ) : selectedPreImportFile.isText ? (
+                            highlightCode(selectedPreImportFile.content || "", selectedPreImportFile.path)
+                          ) : selectedPreImportFile.content !== undefined ? (
+                            highlightCode(selectedPreImportFile.content || "", selectedPreImportFile.path)
+                          ) : (
+                            <em style={{ color: "var(--text-muted)" }}>(Unsupported binary content format cannot be previewed)</em>
+                          )
+                        ) : (
+                          <em style={{ color: "var(--text-muted)" }}>Select a file from the list above to preview its content.</em>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
 

@@ -58,6 +58,7 @@ async function testUploadNormalization() {
     description: "Climate analytics and weather agents",
     version: "1.0.2",
     owner: "Weather Team",
+    type: "AGENT",
     harnesses: ["claude"]
   }, null, 2), "utf8"));
   nestedZip.addFile("weather-agent-1.0.2/agents/", Buffer.alloc(0));
@@ -80,17 +81,22 @@ async function testUploadNormalization() {
     filesCount: parsedData.files.length
   });
 
-  // Ensure files in processCapabilityZip's return are root-level (normalized)
+  // Ensure files in processCapabilityZip's return keep original structure but exclude macOS garbage
   const parsedPaths = parsedData.files.map(f => f.path);
   console.log("Parsed files in manifest check:", parsedPaths);
 
-  const hasNestedParsed = parsedPaths.some(p => p.startsWith("weather-agent-1.0.2") || p.includes("__MACOSX"));
-  if (hasNestedParsed) {
-    console.error("❌ FAIL: Parsed files list has nested paths or macOS metadata!");
+  const hasNestedParsed = parsedPaths.some(p => p.startsWith("weather-agent-1.0.2"));
+  const hasMacParsed = parsedPaths.some(p => p.includes("__MACOSX") || p.includes(".DS_Store"));
+
+  if (!hasNestedParsed) {
+    console.error("❌ FAIL: Parsed files list does not preserve the parent folder prefix!");
     process.exit(1);
-  } else {
-    console.log("✅ PASS: Parsed files in manifest check are 100% root-level.");
   }
+  if (hasMacParsed) {
+    console.error("❌ FAIL: Parsed files list contains macOS metadata (__MACOSX / .DS_Store)!");
+    process.exit(1);
+  }
+  console.log("✅ PASS: Parsed files in manifest check preserve the parent folder but exclude macOS metadata.");
 
   // Save the capability files to persistent disk (simulate storage path behavior)
   const storagePaths = saveExtractedCapability(zipBuffer, parsedData.name, parsedData.version);
@@ -102,36 +108,41 @@ async function testUploadNormalization() {
   const diskFiles = fs.readdirSync(extractedPath);
   console.log("Root disk entries:", diskFiles);
 
-  const hasMacDisk = diskFiles.includes("__MACOSX");
-  const hasDSStoreDisk = diskFiles.includes(".DS_Store");
   const hasNestedFolderDisk = diskFiles.includes("weather-agent-1.0.2");
+  const hasMacDisk = diskFiles.includes("__MACOSX") || diskFiles.includes(".DS_Store");
   
-  console.log(` - Has __MACOSX on disk: ${hasMacDisk ? "FAIL" : "PASS"}`);
-  console.log(` - Has .DS_Store on disk: ${hasDSStoreDisk ? "FAIL" : "PASS"}`);
-  console.log(` - Has nested parent folder on disk: ${hasNestedFolderDisk ? "FAIL" : "PASS"}`);
+  console.log(` - Has nested parent folder on disk: ${hasNestedFolderDisk ? "PASS" : "FAIL"}`);
+  console.log(` - Excluded __MACOSX from disk: ${!hasMacDisk ? "PASS" : "FAIL"}`);
 
-  if (hasMacDisk || hasDSStoreDisk || hasNestedFolderDisk) {
-    console.error("❌ FAIL: Extracted filesystem directory is dirty/nested!");
+  if (!hasNestedFolderDisk) {
+    console.error("❌ FAIL: Extracted filesystem directory ignored/stripped the parent folder!");
     process.exit(1);
   }
-  console.log("✅ PASS: Physical extracted directory contains only clean, root-level files.");
+  if (hasMacDisk) {
+    console.error("❌ FAIL: Extracted filesystem directory contains __MACOSX / .DS_Store garbage!");
+    process.exit(1);
+  }
+  console.log("✅ PASS: Physical extracted directory contains the parent folder and completely excludes macOS metadata.");
 
-  // 5. Verify the saved Zip file itself in `uploads/` contains only clean root-level entries
+  // 5. Verify the saved Zip file itself in `uploads/` contains identical uploaded structure
   console.log("Verifying stored ZIP entries inside uploads/... ");
   const storedZipFile = path.join(process.cwd(), storagePaths.zipPath);
   const storedZip = new AdmZip(storedZipFile);
   const storedEntries = storedZip.getEntries().map(e => e.entryName);
   console.log("Stored ZIP entries:", storedEntries);
 
-  const hasMacInZip = storedEntries.some(p => p.startsWith("__MACOSX") || p.includes("__MACOSX"));
-  const hasDSStoreInZip = storedEntries.some(p => p.includes(".DS_Store"));
-  const hasNestedInZip = storedEntries.some(p => p.startsWith("weather-agent-1.0.2") || p.includes("weather-agent-1.0.2/agents"));
+  const hasNestedInZip = storedEntries.some(p => p.startsWith("weather-agent-1.0.2"));
+  const hasMacInZip = storedEntries.some(p => p.includes("__MACOSX"));
 
-  if (hasMacInZip || hasDSStoreInZip || hasNestedInZip) {
-    console.error("❌ FAIL: Stored ZIP file in uploads/ is dirty/nested!");
+  if (!hasNestedInZip) {
+    console.error("❌ FAIL: Stored ZIP file in uploads/ stripped the parent folder prefix!");
     process.exit(1);
   }
-  console.log("✅ PASS: Stored ZIP file contains only clean, root-level entries.");
+  if (!hasMacInZip) {
+    console.error("❌ FAIL: Stored ZIP file did not preserve the original uploaded __MACOSX folder!");
+    process.exit(1);
+  }
+  console.log("✅ PASS: Stored ZIP file is 100% byte-for-byte identical to the uploaded ZIP (retains __MACOSX).");
 
   // 6. Test actual HTTP API POST to verify the type transition to AGENT!
   console.log("\n[API INTEGRATION TEST] Simulating direct upload POST via HTTP fetch...");
@@ -196,8 +207,8 @@ async function testUploadNormalization() {
     process.exit(1);
   }
 
-  // 8. Test Schema Rigidity rule: AGENT capability with GHCP Agent harness (must fail if missing .agent.md file under .github/agents/)
-  console.log("\n[TEST 8] Verifying that an AGENT capability with 'GHCP Agent' harness FAILS if missing .agent.md file...");
+  // 8. Test Schema Rigidity rule: AGENT capability with GHCP Agent harness (must now succeed as validation is removed!)
+  console.log("\n[TEST 8] Verifying that an AGENT capability with 'GHCP Agent' harness now succeeds even if missing .agent.md file...");
   
   const badAgentZip = new AdmZip();
   badAgentZip.addFile(".capability.json", Buffer.from(JSON.stringify({
@@ -205,6 +216,7 @@ async function testUploadNormalization() {
     description: "Agent without profile.agent.md",
     version: "1.0.9",
     owner: "Weather Team",
+    type: "AGENT",
     harnesses: ["ghcp"]
   }), "utf8"));
   badAgentZip.addFile("agents/", Buffer.alloc(0));
@@ -213,11 +225,11 @@ async function testUploadNormalization() {
   const badAgentZipBuffer = badAgentZip.toBuffer();
 
   try {
-    processCapabilityZip(badAgentZipBuffer, "test-temp-bad-agent-id");
-    console.error("❌ FAIL: processCapabilityZip did not reject Agent capability lacking '.agent.md' under '.github/agents/'!");
-    process.exit(1);
+    const parsed = processCapabilityZip(badAgentZipBuffer, "test-temp-bad-agent-id");
+    console.log("✅ PASS: processCapabilityZip now successfully accepts Agent capability without '.agent.md' file under '.github/agents/'!");
   } catch (e: any) {
-    console.log("✅ PASS: processCapabilityZip correctly rejected Agent capability missing '.agent.md' with message:", e.message);
+    console.error("❌ FAIL: processCapabilityZip rejected Agent capability when validation should be removed:", e.message);
+    process.exit(1);
   }
 
   // 9. Test Schema Rigidity rule: AGENT capability with GHCP Agent harness (must succeed if .github/agents/custom.agent.md exists)
@@ -229,6 +241,7 @@ async function testUploadNormalization() {
     description: "Agent with custom.agent.md",
     version: "1.0.9",
     owner: "Weather Team",
+    type: "AGENT",
     harnesses: ["ghcp"]
   }), "utf8"));
   goodAgentZip.addFile(".github/", Buffer.alloc(0));

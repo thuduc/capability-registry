@@ -50,15 +50,50 @@ export async function GET(
         return NextResponse.json({ error: "Target path is a directory." }, { status: 400 });
       }
 
-      // Read text content
-      let content = "";
-      try {
-        content = fs.readFileSync(targetFilePath, "utf8");
-      } catch (err) {
-        return NextResponse.json({ error: "Unable to read binary or encrypted file." }, { status: 400 });
+      const ext = filePathParam.split(".").pop()?.toLowerCase() || "";
+      const imageExtensions = ["png", "gif", "svg", "jpg", "jpeg", "webp", "ico", "bmp"];
+      const isImage = imageExtensions.includes(ext);
+
+      if (isImage) {
+        try {
+          const mimeType = ext === "svg" ? "image/svg+xml" : ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+          const base64Data = fs.readFileSync(targetFilePath).toString("base64");
+          return NextResponse.json({
+            path: filePathParam,
+            content: `data:${mimeType};base64,${base64Data}`,
+            isImage: true
+          });
+        } catch (err) {
+          return NextResponse.json({ error: "Unable to read image file." }, { status: 400 });
+        }
       }
 
-      return NextResponse.json({ path: filePathParam, content });
+      // Read text content dynamically
+      try {
+        const buffer = fs.readFileSync(targetFilePath);
+        
+        // Inline text helper check
+        const isText = (buf: Buffer) => {
+          if (buf.length === 0) return true;
+          const sampleSize = Math.min(buf.length, 8000);
+          let nullCount = 0;
+          let nonAsciiCount = 0;
+          for (let i = 0; i < sampleSize; i++) {
+            const byte = buf[i];
+            if (byte === 0) nullCount++;
+            else if (byte < 7 || (byte > 14 && byte < 32 && byte !== 27)) nonAsciiCount++;
+          }
+          return nullCount === 0 && (nonAsciiCount / sampleSize <= 0.3);
+        };
+
+        if (isText(buffer)) {
+          return NextResponse.json({ path: filePathParam, content: buffer.toString("utf8"), isText: true });
+        } else {
+          return NextResponse.json({ path: filePathParam, content: "", isBinary: true });
+        }
+      } catch (err) {
+        return NextResponse.json({ error: "Unable to read file." }, { status: 400 });
+      }
     }
 
     // 3. Scenario B: Generate directory tree

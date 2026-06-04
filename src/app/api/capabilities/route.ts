@@ -176,52 +176,7 @@ export async function POST(req: NextRequest) {
         type: (type || "SKILL").toUpperCase() as "AGENT" | "PLUGIN" | "SKILL"
       };
 
-      const zip = new AdmZip(zipBuffer);
-      const zipEntries = zip.getEntries();
-      const filePaths = zipEntries.map((e) => e.entryName.replace(/\\/g, "/"));
 
-      // Schema Rigidity audits
-      for (const harness of harnesses) {
-        const normalizedHarness = harness.toLowerCase();
-        if (normalizedHarness === "claude" || normalizedHarness === "opencode" || normalizedHarness === "codex") {
-          const hasPluginJson = filePaths.some((p) => p.endsWith("plugin.json"));
-          const hasAgentFile = filePaths.some((p) => p.includes("agents/"));
-          const hasSkillFile = filePaths.some((p) => p.includes("skills/"));
-          if (!hasPluginJson && !hasAgentFile && !hasSkillFile) {
-            return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared, but bundle does not contain a plugin (plugin.json), agent (under agents/), or skill (under skills/).` }, { status: 400 });
-          }
-        } else if (normalizedHarness === "github-copilot" || normalizedHarness === "github-copilot-agent" || normalizedHarness === "ghcp") {
-          if (parsedData.type === "AGENT") {
-            const hasCopilotAgent = filePaths.some((p) => p.includes(".github/agents/") && p.endsWith(".agent.md"));
-            if (!hasCopilotAgent) {
-              return NextResponse.json({ error: `Schema Rigidity Violation: Harness '${harness}' declared for Agent capability, but missing a '.agent.md' file under '.github/agents/' folder.` }, { status: 400 });
-            }
-          }
-        }
-      }
-
-      // Always write/overwrite the .capability.json in the zip so it matches the user's final edited metadata!
-      const manifestContent = {
-        name: parsedData.name,
-        description: parsedData.description,
-        version: parsedData.version,
-        owner: parsedData.owner,
-        harnesses: parsedData.harnesses
-      };
-
-      // Check if there is an existing .capability.json in the zip
-      const manifestEntry = zipEntries.find(
-        (e) => e.entryName === ".capability.json" || e.entryName.endsWith("/.capability.json")
-      );
-
-      if (manifestEntry) {
-        // Overwrite the existing file in place
-        manifestEntry.setData(Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
-      } else {
-        // Add the new manifest (always at the root '.capability.json')
-        zip.addFile(".capability.json", Buffer.from(JSON.stringify(manifestContent, null, 2), "utf8"));
-      }
-      zipBuffer = zip.toBuffer();
     } else {
       // Fallback: parse manifest directly from the ZIP
       parsedData = processCapabilityZip(zipBuffer, Date.now().toString());

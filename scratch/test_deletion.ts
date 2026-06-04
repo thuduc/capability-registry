@@ -139,33 +139,33 @@ async function runDeletionTests() {
     // ----------------------------------------------------
     console.log("\n[TEST 4] Verifying that a DRAFT version can always be deleted, even if there is an ACTIVE version...");
 
-    // Find the baseline weather-agent (seeded as ACTIVE v1.0.0)
+    // Find the baseline model-developer (seeded as ACTIVE v1.0.0)
     const weatherCap = await prisma.capability.findUnique({
-      where: { name: "weather-agent" },
+      where: { name: "model-developer" },
       include: { versions: true }
     });
 
     if (!weatherCap) {
-      console.error("Baseline capability 'weather-agent' not found! Re-run seed.js");
+      console.error("Baseline capability 'model-developer' not found! Re-run seed.js");
       process.exit(1);
     }
 
     const activeVersion = weatherCap.versions.find(v => v.status === "ACTIVE");
     assert(activeVersion !== undefined, "Should have an ACTIVE version seeded");
 
-    // Create a new DRAFT version (v1.0.5) of weather-agent
+    // Create a new DRAFT version (v1.0.5) of model-developer
     const draftVersion = await prisma.capabilityVersion.create({
       data: {
         capabilityId: weatherCap.id,
         version: "1.0.5",
         status: "DRAFT",
-        zipPath: "mock_bundles/weather-agent-bundle.zip",
-        extractedPath: "extracted/weather-agent/1.0.5",
+        zipPath: "mock_bundles/model-developer-bundle.zip",
+        extractedPath: "extracted/model-developer/1.0.5",
         harnesses: JSON.stringify(["claude"])
       }
     });
 
-    console.log(`Created temporary DRAFT version v1.0.5. Current weather-agent versions count: ${weatherCap.versions.length + 1}`);
+    console.log(`Created temporary DRAFT version v1.0.5. Current model-developer versions count: ${weatherCap.versions.length + 1}`);
 
     // Attempt to delete this DRAFT version v1.0.5 via version deletion route
     const draftDeleteRes = await fetch(`${origin}/api/capabilities/versions/${draftVersion.id}`, {
@@ -191,7 +191,7 @@ async function runDeletionTests() {
       where: { id: weatherCap.id },
       include: { versions: true }
     });
-    assert(queryActiveCap !== null, "Master weather-agent capability must still exist in DB");
+    assert(queryActiveCap !== null, "Master model-developer capability must still exist in DB");
     assert(queryActiveCap!.versions.some(v => v.id === activeVersion!.id), "ACTIVE version v1.0.0 must still exist and be intact");
 
     if (!failed) {

@@ -101,38 +101,13 @@ export function cleanAndNormalizeZip(zipBuffer: Buffer): Buffer {
            name !== "";
   });
 
-  if (activeEntries.length === 0) {
-    return zipBuffer;
-  }
-
-  // Detect single top-level directory prefix (common to all entries)
-  const firstEntryName = activeEntries[0].entryName.replace(/\\/g, "/");
-  const firstSlash = firstEntryName.indexOf("/");
-  let commonPrefix = "";
-  if (firstSlash !== -1) {
-    const potentialPrefix = firstEntryName.substring(0, firstSlash + 1);
-    const allSharePrefix = activeEntries.every(e => {
-      const name = e.entryName.replace(/\\/g, "/");
-      return name.startsWith(potentialPrefix);
-    });
-    if (allSharePrefix) {
-      commonPrefix = potentialPrefix;
-    }
-  }
-
   const newZip = new AdmZip();
   for (const entry of activeEntries) {
     const name = entry.entryName.replace(/\\/g, "/");
-    if (commonPrefix && name === commonPrefix) {
-      continue;
-    }
-    const targetName = commonPrefix ? name.substring(commonPrefix.length) : name;
-    if (!targetName) continue;
-
     if (entry.isDirectory) {
-      newZip.addFile(targetName + (targetName.endsWith("/") ? "" : "/"), Buffer.alloc(0));
+      newZip.addFile(name + (name.endsWith("/") ? "" : "/"), Buffer.alloc(0));
     } else {
-      newZip.addFile(targetName, entry.getData());
+      newZip.addFile(name, entry.getData());
     }
   }
 
@@ -194,54 +169,16 @@ export function processCapabilityZip(
   // 3. Normalize paths to verify structure
   const filePaths = zipEntries.map((e) => e.entryName.replace(/\\/g, "/"));
 
-  // 4. Type Derivation Logic
-  // - Agent: Derived if the package contains dedicated system prompts or persona layouts (e.g., `.github/agents/profile.agent.md` or files ending in .agent.md under .github/agents/, or files under agents/).
-  // - Plugin: Derived if the package contains active script runtime (`dist/`) or infrastructure schema protocol connector (`.mcp.json`) or a plugin.json file.
-  // - Skill: Derived if package contains ONLY procedural manuals (`skills/[name]/SKILL.md` or `skills/SKILL.md` or files under skills/) and is not Agent or Plugin.
-  const hasPluginFile = filePaths.some(
-    (p) => p.endsWith("plugin.json") || p.includes("dist/") || p.endsWith(".mcp.json")
-  );
-
-  const hasAgentFile = filePaths.some(
-    (p) => p.includes("agents/") || (p.includes(".github/agents/") && p.endsWith(".agent.md")) || p.includes("agents/subagent-profile.md")
-  );
-
-  const hasSkillFile = filePaths.some(
-    (p) => p.includes("skills/")
-  );
-
+  // 4. Read capability type from manifest (default to SKILL, no longer derived structurally)
   let derivedType: "AGENT" | "PLUGIN" | "SKILL" = "SKILL";
-  if (hasPluginFile) {
-    derivedType = "PLUGIN";
-  } else if (hasAgentFile) {
-    derivedType = "AGENT";
-  } else if (hasSkillFile) {
-    derivedType = "SKILL";
-  } else {
-    // If none are specifically present, check if skills directory exists at least, otherwise default to skill or throw
-    derivedType = "SKILL";
-  }
-
-  // 5. Schema Rigidity checks: verify directory structure matching harnesses
-  // Check harnesses and match required files
-  for (const harness of harnesses) {
-    const normalizedHarness = harness.toLowerCase();
-    if (normalizedHarness === "claude" || normalizedHarness === "opencode" || normalizedHarness === "codex") {
-      const hasPluginJson = filePaths.some((p) => p.endsWith("plugin.json"));
-      const hasAgentFileCheck = filePaths.some((p) => p.includes("agents/"));
-      const hasSkillFileCheck = filePaths.some((p) => p.includes("skills/"));
-      if (!hasPluginJson && !hasAgentFileCheck && !hasSkillFileCheck) {
-        throw new Error(`Schema Rigidity Violation: Harness '${harness}' declared, but bundle does not contain a plugin (plugin.json), agent (under agents/), or skill (under skills/).`);
-      }
-    } else if (normalizedHarness === "github-copilot" || normalizedHarness === "github-copilot-agent" || normalizedHarness === "ghcp") {
-      if (derivedType === "AGENT") {
-        const hasCopilotAgent = filePaths.some((p) => p.includes(".github/agents/") && p.endsWith(".agent.md"));
-        if (!hasCopilotAgent) {
-          throw new Error(`Schema Rigidity Violation: Harness '${harness}' declared for Agent capability, but missing a '.agent.md' file under '.github/agents/' folder.`);
-        }
-      }
+  if (manifestData && manifestData.type) {
+    const upperType = manifestData.type.toUpperCase();
+    if (upperType === "AGENT" || upperType === "PLUGIN" || upperType === "SKILL") {
+      derivedType = upperType;
     }
   }
+
+
 
   // Read code or prompt files for differential reviews
   const files: { path: string; content?: string }[] = [];
@@ -285,8 +222,8 @@ export function saveExtractedCapability(
   capabilityName: string,
   versionStr: string
 ): { zipPath: string; extractedPath: string } {
-  // Normalize and clean ZIP structure
-  zipBuffer = cleanAndNormalizeZip(zipBuffer);
+  const originalZipBuffer = zipBuffer; // Keep exact uploaded bytes for storage/downloads
+  const cleanedZipBuffer = cleanAndNormalizeZip(zipBuffer); // Strip __MACOSX and .DS_Store for clean extraction
 
   const baseStorageDir = path.join(process.cwd(), ".registry_storage");
   const uploadsDir = path.join(baseStorageDir, "uploads");
@@ -296,13 +233,13 @@ export function saveExtractedCapability(
   fs.mkdirSync(uploadsDir, { recursive: true });
   fs.mkdirSync(extractedDir, { recursive: true });
 
-  // Save the zip file
+  // Save the zip file using raw uploaded bytes
   const zipFileName = `${capabilityName}-${versionStr}.zip`;
   const zipPath = path.join(uploadsDir, zipFileName);
-  fs.writeFileSync(zipPath, zipBuffer);
+  fs.writeFileSync(zipPath, originalZipBuffer);
 
-  // Extract the zip contents to the storage folder
-  const zip = new AdmZip(zipBuffer);
+  // Extract only the cleaned entries (no __MACOSX or .DS_Store)
+  const zip = new AdmZip(cleanedZipBuffer);
   zip.extractAllTo(extractedDir, true);
 
   return {
