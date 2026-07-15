@@ -80,6 +80,32 @@ export default function Home() {
   // --- Global States ---
   const [viewMode, setViewMode] = useState<"public" | "developer" | "admin">("public");
   const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  // --- Custom Dialog and Toast states ---
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: "success" | "info" | "warning" | "error" }[]>([]);
+  const [customAlert, setCustomAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "info" | "success" | "error" | "warning"; onClose?: () => void } | null>(null);
+  const [customConfirm, setCustomConfirm] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; onCancel: () => void } | null>(null);
+
+  const showToast = (message: string, type: "success" | "info" | "warning" | "error" = "info") => {
+    const id = Date.now().toString() + Math.random().toString();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
+
+  const showAlert = (message: string, type: "success" | "info" | "warning" | "error" = "info", title: string = "") => {
+    let defaultTitle = "Information";
+    if (type === "success") defaultTitle = "Success";
+    if (type === "error") defaultTitle = "Error";
+    if (type === "warning") defaultTitle = "Warning";
+    setCustomAlert({
+      isOpen: true,
+      title: title || defaultTitle,
+      message,
+      type
+    });
+  };
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -468,7 +494,7 @@ export default function Home() {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Error downloading file");
+      showToast(err.message || "Error downloading file", "error");
     }
   };
 
@@ -611,7 +637,7 @@ export default function Home() {
       setEnteredHarnesses([]);
       setEnteredType("SKILL");
 
-      alert(`Capability '${data.name}' imported successfully as Draft!`);
+      showToast(`Capability '${data.name}' imported successfully as Draft!`, "success");
       fetchCapabilities();
     } catch (err: any) {
       console.error(err);
@@ -650,15 +676,13 @@ export default function Home() {
       await fetchCapabilities();
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Error submitting comment");
+      showToast(err.message || "Error submitting comment", "error");
     } finally {
       setSubmittingComment(false);
     }
   };
 
-  const handleStatusTransition = async (action: string, versionId: string) => {
-    if (!confirm(`Are you sure you want to trigger this action (${action})?`)) return;
-
+  const executeStatusTransition = async (action: string, versionId: string) => {
     try {
       const res = await fetch(`/api/capabilities/versions/${versionId}/status`, {
         method: "PATCH",
@@ -679,22 +703,33 @@ export default function Home() {
       }
 
       if (action === "ROLLBACK") {
-        alert(`Success: Deprecated this active version and successfully rolled back production environment to version ${data.rolledBackTo}!`);
+        showAlert(`Success: Deprecated this active version and successfully rolled back production environment to version ${data.rolledBackTo}!`, "success");
       } else {
-        alert(`Status updated successfully!`);
+        showToast(`Status updated successfully!`, "success");
       }
 
       // Refresh capabilities
       await fetchCapabilities();
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Failed to update lifecycle status.");
+      showToast(err.message || "Failed to update lifecycle status.", "error");
     }
   };
 
-  const handleDeleteCapability = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to permanently delete the capability '${name}'?\nThis will permanently delete all its versions, comments, and physical storage files.`)) return;
+  const handleStatusTransition = async (action: string, versionId: string) => {
+    setCustomConfirm({
+      isOpen: true,
+      title: "Transition Release Status",
+      message: `Are you sure you want to trigger this action (${action})?`,
+      onConfirm: () => {
+        setCustomConfirm(null);
+        executeStatusTransition(action, versionId);
+      },
+      onCancel: () => setCustomConfirm(null)
+    });
+  };
 
+  const executeDeleteCapability = async (id: string, name: string) => {
     try {
       const res = await fetch(`/api/capabilities/${id}`, {
         method: "DELETE",
@@ -709,20 +744,31 @@ export default function Home() {
         throw new Error(data.error || "Failed to delete capability.");
       }
 
-      alert(`Capability '${name}' deleted successfully!`);
+      showToast(`Capability '${name}' deleted successfully!`, "success");
       setSelectedCapability(null);
       setSelectedVersion(null);
       // Refresh capabilities list
       await fetchCapabilities();
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Failed to delete capability.");
+      showToast(err.message || "Failed to delete capability.", "error");
     }
   };
 
-  const handleDeleteVersion = async (versionId: string, versionStr: string, capabilityName: string) => {
-    if (!confirm(`Are you sure you want to permanently delete version v${versionStr} of '${capabilityName}'?\nThis will permanently delete this version's files and comments.`)) return;
+  const handleDeleteCapability = async (id: string, name: string) => {
+    setCustomConfirm({
+      isOpen: true,
+      title: "Delete GenAI Capability",
+      message: `Are you sure you want to permanently delete the capability '${name}'?\nThis will permanently delete all its versions, comments, and physical storage files.`,
+      onConfirm: () => {
+        setCustomConfirm(null);
+        executeDeleteCapability(id, name);
+      },
+      onCancel: () => setCustomConfirm(null)
+    });
+  };
 
+  const executeDeleteVersion = async (versionId: string, versionStr: string, capabilityName: string) => {
     try {
       const res = await fetch(`/api/capabilities/versions/${versionId}`, {
         method: "DELETE",
@@ -737,15 +783,28 @@ export default function Home() {
         throw new Error(data.error || "Failed to delete capability version.");
       }
 
-      alert(data.message || `Version v${versionStr} deleted successfully!`);
+      showToast(data.message || `Version v${versionStr} deleted successfully!`, "success");
       setSelectedCapability(null);
       setSelectedVersion(null);
       // Refresh capabilities list
       await fetchCapabilities();
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Failed to delete capability version.");
+      showToast(err.message || "Failed to delete capability version.", "error");
     }
+  };
+
+  const handleDeleteVersion = async (versionId: string, versionStr: string, capabilityName: string) => {
+    setCustomConfirm({
+      isOpen: true,
+      title: "Delete Capability Version",
+      message: `Are you sure you want to permanently delete version v${versionStr} of '${capabilityName}'?\nThis will permanently delete this version's files and comments.`,
+      onConfirm: () => {
+        setCustomConfirm(null);
+        executeDeleteVersion(versionId, versionStr, capabilityName);
+      },
+      onCancel: () => setCustomConfirm(null)
+    });
   };
 
   // Helper to get type badge
@@ -869,7 +928,7 @@ export default function Home() {
       setRegisterUsername("");
       setRegisterPassword("");
       setRegisterConfirmPassword("");
-      alert("Registration completed successfully! Welcome, " + loginData.username);
+      showToast("Registration completed successfully! Welcome, " + loginData.username, "success");
     } catch (err: any) {
       console.error(err);
       setRegisterError(err.message || "An unexpected registration error occurred.");
@@ -1022,19 +1081,17 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create tag.");
 
-      alert("Tag created successfully!");
+      showToast("Tag created successfully!", "success");
       setIsCreateTagOpen(false);
       setNewTagName("");
       setNewTagDesc("");
       await fetchTags();
     } catch (err: any) {
-      alert(err.message || "Error creating tag");
+      showToast(err.message || "Error creating tag", "error");
     }
   };
 
-  const handleDeleteTag = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this tag?")) return;
-
+  const executeDeleteTag = async (id: string) => {
     try {
       const res = await fetch(`/api/tags/${id}`, {
         method: "DELETE",
@@ -1047,18 +1104,31 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to delete tag.");
 
-      alert("Tag deleted successfully!");
+      showToast("Tag deleted successfully!", "success");
       await fetchTags();
       await fetchCapabilities();
     } catch (err: any) {
-      alert(err.message || "Error deleting tag");
+      showToast(err.message || "Error deleting tag", "error");
     }
+  };
+
+  const handleDeleteTag = async (id: string) => {
+    setCustomConfirm({
+      isOpen: true,
+      title: "Delete Governance Tag",
+      message: "Are you sure you want to delete this tag?",
+      onConfirm: () => {
+        setCustomConfirm(null);
+        executeDeleteTag(id);
+      },
+      onCancel: () => setCustomConfirm(null)
+    });
   };
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUsername.trim() || !newUserPassword.trim()) {
-      alert("Username and Password are required.");
+      showToast("Username and Password are required.", "warning");
       return;
     }
 
@@ -1081,7 +1151,7 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create user.");
 
-      alert("User provisioned successfully!");
+      showToast("User provisioned successfully!", "success");
       setIsCreateUserOpen(false);
       setNewUsername("");
       setNewUserPassword("");
@@ -1089,19 +1159,19 @@ export default function Home() {
       setSystemUsers(prev => [...prev, { username: newUsername.trim(), roles: rolesString }]);
       await fetchUsers();
     } catch (err: any) {
-      alert(err.message || "Error creating user");
+      showToast(err.message || "Error creating user", "error");
     }
   };
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUserForPasswordUpdate || !newUserPasswordUpdate.trim() || !confirmUserPassword.trim()) {
-      alert("Both password fields are required.");
+      showToast("Both password fields are required.", "warning");
       return;
     }
 
     if (newUserPasswordUpdate !== confirmUserPassword) {
-      alert("New passwords do not match.");
+      showToast("New passwords do not match.", "error");
       return;
     }
 
@@ -1124,14 +1194,14 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to update password.");
 
-      alert(`Password for user "${selectedUserForPasswordUpdate.username}" updated successfully!`);
+      showToast(`Password for user "${selectedUserForPasswordUpdate.username}" updated successfully!`, "success");
       setIsUpdatePasswordOpen(false);
       setSelectedUserForPasswordUpdate(null);
       setNewUserPasswordUpdate("");
       setConfirmUserPassword("");
       await fetchUsers();
     } catch (err: any) {
-      alert(err.message || "Error updating password");
+      showToast(err.message || "Error updating password", "error");
     } finally {
       setUpdatingPassword(false);
     }
@@ -1140,12 +1210,12 @@ export default function Home() {
   const handleSelfUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selfOldPassword.trim() || !selfNewPassword.trim() || !selfConfirmPassword.trim()) {
-      alert("All password fields are required.");
+      showToast("All password fields are required.", "warning");
       return;
     }
 
     if (selfNewPassword !== selfConfirmPassword) {
-      alert("New passwords do not match.");
+      showToast("New passwords do not match.", "error");
       return;
     }
 
@@ -1168,13 +1238,13 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to update password.");
 
-      alert("Your password has been updated successfully!");
+      showToast("Your password has been updated successfully!", "success");
       setIsSelfPasswordOpen(false);
       setSelfOldPassword("");
       setSelfNewPassword("");
       setSelfConfirmPassword("");
     } catch (err: any) {
-      alert(err.message || "Error updating password");
+      showToast(err.message || "Error updating password", "error");
     } finally {
       setSelfUpdating(false);
     }
@@ -1742,7 +1812,7 @@ export default function Home() {
                               navigator.clipboard.writeText(
                                 getInstallCommand(selectedCapability.name, selectedVersion.version, activeInstallTab)
                               );
-                              alert("Terminal command copied to clipboard!");
+                              showToast("Terminal command copied to clipboard!", "success");
                             }}
                           >
                             Copy
@@ -2837,9 +2907,9 @@ export default function Home() {
                                 const file = new File([blob], "weather-agent-v1.1.0.zip", { type: "application/zip" });
                                 setSelectedFile(file);
                                 setImportComment("Pushing v1.1.0 update to weather-agent bundle.");
-                                alert("Loaded preloaded Weather Agent (v1.1.0) test bundle!");
+                                showToast("Loaded preloaded Weather Agent (v1.1.0) test bundle!", "success");
                               } catch (e) {
-                                alert("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.");
+                                showToast("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.", "warning");
                               }
                             }}
                           >
@@ -2856,9 +2926,9 @@ export default function Home() {
                                 const file = new File([blob], "security-playbook-v1.0.0.zip", { type: "application/zip" });
                                 setSelectedFile(file);
                                 setImportComment("Updating security playbook SOP to OAuth2 compliant v1.0.0.");
-                                alert("Loaded preloaded Security Playbook (v1.0.0) test bundle!");
+                                showToast("Loaded preloaded Security Playbook (v1.0.0) test bundle!", "success");
                               } catch (e) {
-                                alert("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.");
+                                showToast("Mock bundle not loaded directly. You can manually upload a ZIP from the workspace 'mock_bundles' directory.", "warning");
                               }
                             }}
                           >
@@ -3182,6 +3252,63 @@ export default function Home() {
               </form>
             )}
 
+          </div>
+        </div>
+      )}
+
+      {/* --- Custom Toasts Overlay --- */}
+      <div className="toast-container">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast-item toast-${toast.type}`}>
+            <span className="toast-content">{toast.message}</span>
+            <button className="toast-close" onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* --- Custom Alert Dialog Modal --- */}
+      {customAlert?.isOpen && (
+        <div className="custom-dialog-overlay" onClick={() => setCustomAlert(null)}>
+          <div className="custom-dialog-content" onClick={(e) => e.stopPropagation()}>
+            <div className="custom-dialog-header" style={{ borderLeft: `4px solid var(--${customAlert.type === "error" ? "danger" : customAlert.type})` }}>
+              <span style={{ fontSize: "18px" }}>
+                {customAlert.type === "success" && "🟢"}
+                {customAlert.type === "error" && "🔴"}
+                {customAlert.type === "warning" && "🟡"}
+                {customAlert.type === "info" && "🔵"}
+              </span>
+              <h4 className="custom-dialog-title">{customAlert.title}</h4>
+            </div>
+            <div className="custom-dialog-body">{customAlert.message}</div>
+            <div className="custom-dialog-footer">
+              <button className="btn btn-primary" style={{ padding: "6px 16px" }} onClick={() => {
+                if (customAlert.onClose) customAlert.onClose();
+                setCustomAlert(null);
+              }}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Custom Confirm Dialog Modal --- */}
+      {customConfirm?.isOpen && (
+        <div className="custom-dialog-overlay" onClick={customConfirm.onCancel}>
+          <div className="custom-dialog-content" onClick={(e) => e.stopPropagation()}>
+            <div className="custom-dialog-header" style={{ borderLeft: "4px solid var(--warning)" }}>
+              <span style={{ fontSize: "18px" }}>❓</span>
+              <h4 className="custom-dialog-title">{customConfirm.title}</h4>
+            </div>
+            <div className="custom-dialog-body">{customConfirm.message}</div>
+            <div className="custom-dialog-footer">
+              <button className="btn btn-secondary" style={{ padding: "6px 14px" }} onClick={customConfirm.onCancel}>
+                Cancel
+              </button>
+              <button className="btn btn-danger" style={{ padding: "6px 14px" }} onClick={customConfirm.onConfirm}>
+                Confirm
+              </button>
+            </div>
           </div>
         </div>
       )}
