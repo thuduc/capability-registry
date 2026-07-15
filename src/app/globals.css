@@ -419,7 +419,8 @@ a {
   color: var(--text-secondary);
 }
 
-.status-pending {
+.status-pending,
+.status-pending-review {
   background-color: var(--warning-light);
   color: var(--warning);
   border: 1px solid rgba(245, 158, 11, 0.3);
